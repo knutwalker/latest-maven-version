@@ -27,7 +27,20 @@ The main usage is by providing maven coordinates in the form of `groupId:artifac
 These version qualifier are [Semantic Version Ranges](https://www.npmjs.com/package/semver#advanced-range-syntax).
 For each of the provided versions, the latest available version on maven central is printed.
 
+#### Default version
+
+The version ranges can be left out, in which case the latest overall version is printed.
+
+#### Multiple Version ranges
+
+You can also enter multiple coordinates, each with their own versions to check against.
+The result is printed after all versions were checked successfully.
+
+#### Pre Release Versions
+
 Pre-releases can be included with the `--include-pre-releases` flag (or `-i` for short).
+
+#### Version overrides
 
 The versions are matched in order and a single version can only be matched by one qualifier.
 Previous matches will – depending on the range – consume all versions that would have also been matched by later qualifiers.
@@ -35,7 +48,7 @@ Try to define the qualifiers in the order from most restrictive to least.
 
 ## Examples
 
-Matching against minor-compatible releases
+Matching against minor-compatible releases.
 
     $ latest-maven-version org.neo4j.gds:proc:~1.1:~1.3:1
     Latest version(s) for org.neo4j.gds:proc:
@@ -52,6 +65,7 @@ Matching against major compatible releases. Note that `1.3` does not produce any
     No version matching ^1.3
     Latest version matching ^1: 1.0.0
 
+
 Inclusion of pre releases.
 
     $ latest-maven-version org.neo4j.gds:proc:~1.1:~1.3:1 --include-pre-releases
@@ -59,6 +73,26 @@ Inclusion of pre releases.
     Latest version matching ~1.1: 1.1.4
     Latest version matching ~1.3: 1.3.1
     Latest version matching ^1: 1.4.0-alpha02
+
+
+Default version.
+
+    $ latest-maven-version org.neo4j.gds:proc
+    Latest version(s) for org.neo4j.gds:proc:
+    Latest version matching *: 1.3.1
+
+    $ latest-maven-version org.neo4j.gds:proc --include-pre-releases
+    Latest version(s) for org.neo4j.gds:proc:
+    Latest version matching *: 1.4.0-alpha02
+
+
+Multiple checks.
+
+    $ latest-maven-version org.neo4j.gds:proc org.neo4j:neo4j
+    Latest version(s) for org.neo4j.gds:proc:
+    Latest version matching *: 1.3.1
+    Latest version(s) for org.neo4j:neo4j:
+    Latest version matching *: 4.1.1
 
 
 

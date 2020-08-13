@@ -25,7 +25,20 @@
 //! These version qualifier are [Semantic Version Ranges](https://www.npmjs.com/package/semver#advanced-range-syntax).
 //! For each of the provided versions, the latest available version on maven central is printed.
 //!
+//! ### Default version
+//!
+//! The version ranges can be left out, in which case the latest overall version is printed.
+//!
+//! ### Multiple Version ranges
+//!
+//! You can also enter multiple coordinates, each with their own versions to check against.
+//! The result is printed after all versions were checked successfully.
+//!
+//! ### Pre Release Versions
+//!
 //! Pre-releases can be included with the `--include-pre-releases` flag (or `-i` for short).
+//!
+//! ### Version overrides
 //!
 //! The versions are matched in order and a single version can only be matched by one qualifier.
 //! Previous matches will – depending on the range – consume all versions that would have also been matched by later qualifiers.
@@ -33,7 +46,7 @@
 //!
 //! # Examples
 //!
-//! Matching against minor-compatible releases
+//! Matching against minor-compatible releases.
 //!
 //!     $ latest-maven-version org.neo4j.gds:proc:~1.1:~1.3:1
 //!     Latest version(s) for org.neo4j.gds:proc:
@@ -50,6 +63,7 @@
 //!     No version matching ^1.3
 //!     Latest version matching ^1: 1.0.0
 //!
+//!
 //! Inclusion of pre releases.
 //!
 //!     $ latest-maven-version org.neo4j.gds:proc:~1.1:~1.3:1 --include-pre-releases
@@ -59,151 +73,196 @@
 //!     Latest version matching ^1: 1.4.0-alpha02
 //!
 //!
+//! Default version.
+//!
+//!     $ latest-maven-version org.neo4j.gds:proc
+//!     Latest version(s) for org.neo4j.gds:proc:
+//!     Latest version matching *: 1.3.1
+//!
+//!     $ latest-maven-version org.neo4j.gds:proc --include-pre-releases
+//!     Latest version(s) for org.neo4j.gds:proc:
+//!     Latest version matching *: 1.4.0-alpha02
+//!
+//!
+//! Multiple checks.
+//!
+//!     $ latest-maven-version org.neo4j.gds:proc org.neo4j:neo4j
+//!     Latest version(s) for org.neo4j.gds:proc:
+//!     Latest version matching *: 1.3.1
+//!     Latest version(s) for org.neo4j:neo4j:
+//!     Latest version matching *: 4.1.1
+//!
+//!
 #[macro_use]
 extern crate eyre;
 
 use color_eyre::Help;
 use eyre::{Context, Result};
+use semver::{Version, VersionReq};
+use std::rc::Rc;
 use yansi::Paint;
 
 fn main() -> Result<()> {
-    let opts = opts::Opts::new()?;
-    let versions = mvnmeta::check(opts.resolver(), opts.group_id(), opts.artifact())?;
+    if atty::is(atty::Stream::Stdout) {
+        color_eyre::install()?;
+    } else {
+        Paint::disable();
+    }
 
-    println!(
-        "Latest version(s) for {}:{}:",
-        Paint::magenta(opts.group_id()),
-        Paint::blue(opts.artifact())
-    );
+    let opts = opts::Opts::new();
+    let resolver = opts.resolver();
+    let include_pre_releases = opts.include_pre_releases();
 
-    let latest = versions.latest_versions(opts.include_pre_releases(), opts.into_requirements());
-    for (req, latest) in latest {
-        if let Some(latest) = latest {
-            println!(
-                "Latest version matching {}: {}",
-                Paint::cyan(req).bold(),
-                Paint::green(latest).bold()
-            );
-        } else {
-            println!("No version matching {}", Paint::yellow(req).bold());
+    let checks = opts.into_version_checks();
+    let results = checks
+        .into_iter()
+        .map(|check| run_check(check, &*resolver, include_pre_releases))
+        .collect::<Result<Vec<_>>>()?;
+
+    for CheckResult {
+        coordinates,
+        versions,
+    } in results
+    {
+        println!(
+            "Latest version(s) for {}:{}:",
+            Paint::magenta(coordinates.group_id),
+            Paint::blue(coordinates.artifact)
+        );
+
+        for (req, latest) in versions {
+            if let Some(latest) = latest {
+                println!(
+                    "Latest version matching {}: {}",
+                    Paint::cyan(req).bold(),
+                    Paint::green(latest).bold()
+                );
+            } else {
+                println!("No version matching {}", Paint::yellow(req).bold());
+            }
         }
     }
 
     Ok(())
 }
 
+fn run_check(
+    check: VersionCheck,
+    resolver: &str,
+    include_pre_releases: bool,
+) -> Result<CheckResult> {
+    let VersionCheck {
+        coordinates,
+        versions,
+    } = check;
+
+    let all_versions = mvnmeta::check(resolver, &coordinates.group_id, &coordinates.artifact)?;
+    let versions = all_versions.latest_versions(include_pre_releases, versions);
+    Ok(CheckResult {
+        coordinates,
+        versions,
+    })
+}
+
+#[derive(Debug)]
+struct Coordinates {
+    group_id: String,
+    artifact: String,
+}
+
+#[derive(Debug)]
+struct VersionCheck {
+    coordinates: Coordinates,
+    versions: Vec<VersionReq>,
+}
+#[derive(Debug)]
+struct CheckResult {
+    coordinates: Coordinates,
+    versions: Vec<(VersionReq, Option<Version>)>,
+}
+
 mod opts {
     use super::*;
-    use atty::Stream::Stdout;
     use clap::{
-        AppSettings::{ColoredHelp, DeriveDisplayOrder, UnifiedHelpMessage},
+        AppSettings::{ArgRequiredElseHelp, ColoredHelp, DeriveDisplayOrder, UnifiedHelpMessage},
         Clap,
     };
-    use semver::VersionReq;
 
     #[derive(Clap, Debug)]
-    #[clap(version, author, about, setting = ColoredHelp, setting = DeriveDisplayOrder, setting = UnifiedHelpMessage)]
+    #[clap(version, author, about, setting = ArgRequiredElseHelp, setting = ColoredHelp, setting = DeriveDisplayOrder, setting = UnifiedHelpMessage)]
     pub(crate) struct Opts {
-        /// The maven groupId
-        #[clap(short, long, requires = "artifact", conflicts_with = "coordinates")]
-        group_id: Option<String>,
-
-        /// The maven artifact
-        #[clap(short, long, requires = "group-id", conflicts_with = "coordinates")]
-        artifact: Option<String>,
-
-        /// A list of version requirements that act as group identifiers
+        /// The maven coordinates to check for. Can be specified multiple times.
         ///
+        /// These arguments take the form of `{groupId}:{artifactId}[:{version}]*`.
+        /// The versions are treated as requirement qualifiers.
         /// Every matching version will be collected into the same bucket per requirement.
         /// The latest version per bucket is then shown.
         /// The value for a requirement follow the semver range specification from
         /// https://www.npmjs.com/package/semver#advanced-range-syntax
-        #[clap(short, long, parse(try_from_str = parse_version))]
-        versions: Vec<VersionReq>,
+        #[clap(required = true, min_values = 1, parse(try_from_str = parse_coordinates))]
+        version_checks: Vec<VersionCheck>,
 
         /// Also consider pre releases.
         #[clap(short, long)]
         include_pre_releases: bool,
 
-        /// Use this repository as resolver. Must follow maven style publication.
-        ///
-        #[clap(long, default_value = "https://repo.maven.apache.org/maven2")]
-        resolver: String,
+        /// Use this repository as resolver. Must follow maven style publication. By default, Maven Central is used.
+        #[clap(short, long, parse(from_str = to_rc))]
+        resolver: Option<Rc<String>>,
+    }
 
-        /// Force colored output, even on non-terminals.
-        #[clap(long, conflicts_with = "no-color", alias = "colour")]
-        color: bool,
+    fn parse_coordinates(input: &str) -> Result<VersionCheck> {
+        let mut segments = input.split(':');
+        let group_id = match segments.next() {
+            Some(group_id) => String::from(group_id),
+            None => bail!(
+                "The coordinates {} are invalid. Expected at least two elements, but got nothing.",
+                Paint::red(input)
+            ),
+        };
+        let artifact = match segments.next() {
+            Some(artifact_id) => String::from(artifact_id),
+            None => bail!(
+                "The coordinates {} are invalid. Expected at least two elements, but got only one.",
+                Paint::red(input)
+            ),
+        };
 
-        /// Disabled colored output, even for terminals.
-        #[clap(long, conflicts_with = "color", alias = "no-colour")]
-        no_color: bool,
-
-        /// The maven coordinates to check for. In the format of `{groupId}:{artifactId}[:{version}]`.
-        #[clap(conflicts_with = "group-id", conflicts_with = "artifact")]
-        coordinates: Option<String>,
+        let versions = segments.map(parse_version).collect::<Result<Vec<_>>>()?;
+        Ok(VersionCheck {
+            coordinates: Coordinates { group_id, artifact },
+            versions,
+        })
     }
 
     fn parse_version(version: &str) -> Result<VersionReq> {
         VersionReq::parse(version)
-        .wrap_err(format!("Could not parse {} into a semantic version range.", Paint::red(version)))
-        .suggestion("Provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax")
+            .wrap_err(format!("Could not parse {} into a semantic version range.", Paint::red(version)))
+            .suggestion("Provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax")
+    }
+
+    fn to_rc(input: &str) -> Rc<String> {
+        Rc::new(input.into())
     }
 
     impl Opts {
-        pub(crate) fn new() -> Result<Self> {
-            let mut opts = Opts::parse();
+        pub(crate) fn new() -> Self {
+            Opts::parse()
+        }
 
-            if opts.disable_color() {
-                Paint::disable();
-            } else {
-                color_eyre::install()?;
+        pub(crate) fn resolver(&self) -> Rc<String> {
+            match &self.resolver {
+                Some(resolver) => Rc::clone(resolver),
+                None => Rc::new(String::from("https://repo.maven.apache.org/maven2")),
             }
-
-            if let Some(coordinates) = opts.coordinates.take() {
-                let mut segments = coordinates.split(':');
-                opts.group_id = segments.next().map(String::from);
-                if opts.group_id.is_none() {
-                    bail!("The coordinates {} are invalid. Expected at least two elements, but got nothing.", Paint::red(coordinates));
-                }
-
-                opts.artifact = segments.next().map(String::from);
-                if opts.artifact.is_none() {
-                    bail!("The coordinates {} are invalid. Expected at least two elements, but got only one.", Paint::red(coordinates));
-                }
-
-                let versions = segments.map(parse_version).collect::<Result<Vec<_>>>()?;
-                opts.versions.extend(versions);
-            }
-
-            Ok(opts)
-        }
-
-        fn disable_color(&self) -> bool {
-            match (self.color, self.no_color) {
-                (true, _) => false,
-                (_, true) => true,
-                _ => !atty::is(Stdout),
-            }
-        }
-
-        pub(crate) fn group_id(&self) -> &str {
-            self.group_id.as_deref().unwrap_or("org.neo4j")
-        }
-
-        pub(crate) fn artifact(&self) -> &str {
-            self.artifact.as_deref().unwrap_or("neo4j")
-        }
-
-        pub(crate) fn resolver(&self) -> &str {
-            &self.resolver
         }
 
         pub(crate) fn include_pre_releases(&self) -> bool {
             self.include_pre_releases
         }
 
-        pub(crate) fn into_requirements(self) -> Vec<VersionReq> {
-            self.versions
+        pub(crate) fn into_version_checks(self) -> Vec<VersionCheck> {
+            self.version_checks
         }
     }
 }
@@ -284,8 +343,8 @@ mod mvnmeta {
 }
 
 mod versions {
+    use super::*;
     use itertools::Itertools;
-    use semver::{Version, VersionReq};
     use serde::Deserialize;
 
     #[derive(Debug, Deserialize)]
