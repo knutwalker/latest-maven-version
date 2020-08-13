@@ -187,17 +187,11 @@ mod opts {
         }
 
         pub(crate) fn group_id(&self) -> &str {
-            self.group_id
-                .as_ref()
-                .map(|x| x.as_str())
-                .unwrap_or("org.neo4j")
+            self.group_id.as_deref().unwrap_or("org.neo4j")
         }
 
         pub(crate) fn artifact(&self) -> &str {
-            self.artifact
-                .as_ref()
-                .map(|x| x.as_str())
-                .unwrap_or("neo4j")
+            self.artifact.as_deref().unwrap_or("neo4j")
         }
 
         pub(crate) fn resolver(&self) -> &str {
