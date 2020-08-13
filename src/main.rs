@@ -330,7 +330,13 @@ mod versions {
             mut requirements: Vec<VersionReq>,
         ) -> Vec<(VersionReq, Option<Version>)> {
             if requirements.is_empty() {
-                requirements.push(VersionReq::any());
+                let req = if allow_pre_release {
+                    VersionReq::any()
+                } else {
+                    VersionReq::parse("*")
+                        .expect("Parsing `*` into a version range always succeeds.")
+                };
+                requirements.push(req);
             }
             let latest = self.find_latest_versions(&requirements[..], allow_pre_release);
             requirements.into_iter().zip(latest.into_iter()).collect()
