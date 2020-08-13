@@ -99,7 +99,6 @@ extern crate eyre;
 use color_eyre::Help;
 use eyre::{Context, Result};
 use semver::{Version, VersionReq};
-use std::rc::Rc;
 use yansi::Paint;
 
 fn main() -> Result<()> {
@@ -109,14 +108,14 @@ fn main() -> Result<()> {
         Paint::disable();
     }
 
-    let opts = opts::Opts::new();
-    let resolver = opts.resolver();
+    let mut opts = opts::Opts::new();
+    let server = opts.resolver_server();
     let include_pre_releases = opts.include_pre_releases();
 
     let checks = opts.into_version_checks();
     let results = checks
         .into_iter()
-        .map(|check| run_check(check, &*resolver, include_pre_releases))
+        .map(|check| run_check(check, &server, include_pre_releases))
         .collect::<Result<Vec<_>>>()?;
 
     for CheckResult {
@@ -148,7 +147,7 @@ fn main() -> Result<()> {
 
 fn run_check(
     check: VersionCheck,
-    resolver: &str,
+    server: &Server,
     include_pre_releases: bool,
 ) -> Result<CheckResult> {
     let VersionCheck {
@@ -156,12 +155,18 @@ fn run_check(
         versions,
     } = check;
 
-    let all_versions = mvnmeta::check(resolver, &coordinates.group_id, &coordinates.artifact)?;
+    let all_versions = mvnmeta::check(server, &coordinates.group_id, &coordinates.artifact)?;
     let versions = all_versions.latest_versions(include_pre_releases, versions);
     Ok(CheckResult {
         coordinates,
         versions,
     })
+}
+
+#[derive(Debug)]
+struct Server {
+    url: String,
+    auth: Option<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -206,9 +211,25 @@ mod opts {
         #[clap(short, long)]
         include_pre_releases: bool,
 
-        /// Use this repository as resolver. Must follow maven style publication. By default, Maven Central is used.
-        #[clap(short, long, parse(from_str = to_rc))]
-        resolver: Option<Rc<String>>,
+        /// Use this repository as resolver. Must follow maven style publication.
+        ///
+        /// By default, Maven Central is used.
+        #[clap(short, long, alias = "repo")]
+        resolver: Option<String>,
+
+        /// Username for authentication against the resolver. Aliased to --username.
+        ///
+        /// If provided, requests against the resolver will authenticate with Basic Auth.
+        /// See the `--help` option for the password to see how to provide the password.
+        #[clap(short, long, alias = "username")]
+        user: Option<String>,
+
+        /// Consider leaving this undefined, the password will be read from stdin. Aliased to --password.
+        ///
+        /// Password for authentication against the resolver. If provided, the given value is used.
+        /// However, if not provided, but a username has been, the password will be read from a secure prompt.
+        #[clap(short, long, requires = "user", alias = "password")]
+        pass: Option<String>,
     }
 
     fn parse_coordinates(input: &str) -> Result<VersionCheck> {
@@ -241,20 +262,35 @@ mod opts {
             .suggestion("Provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax")
     }
 
-    fn to_rc(input: &str) -> Rc<String> {
-        Rc::new(input.into())
-    }
-
     impl Opts {
         pub(crate) fn new() -> Self {
             Opts::parse()
         }
 
-        pub(crate) fn resolver(&self) -> Rc<String> {
-            match &self.resolver {
-                Some(resolver) => Rc::clone(resolver),
-                None => Rc::new(String::from("https://repo.maven.apache.org/maven2")),
-            }
+        pub(crate) fn resolver_server(&mut self) -> Server {
+            let url = self
+                .resolver
+                .take()
+                .unwrap_or_else(|| String::from("https://repo.maven.apache.org/maven2"));
+            let auth = self.auth();
+            Server { url, auth }
+        }
+
+        fn auth(&mut self) -> Option<(String, String)> {
+            let user = self.user.take()?;
+            let pass = match self.pass.take() {
+                Some(pass) => pass,
+                None => {
+                    use dialoguer::Password;
+                    Password::new()
+                        .with_prompt(format!("Password for {}", Paint::cyan(&user)))
+                        .allow_empty_password(true)
+                        .interact()
+                        .ok()?
+                }
+            };
+
+            Some((user, pass))
         }
 
         pub(crate) fn include_pre_releases(&self) -> bool {
@@ -284,18 +320,22 @@ mod mvnmeta {
         versions: Versions,
     }
 
-    pub(crate) fn check(resolver: &str, group_id: &str, artifact: &str) -> Result<Versions> {
-        let url = url(resolver, group_id, artifact)
-            .ok_or_else(|| eyre!("Invalid resolver: {}", Paint::red(resolver).bold()))?;
-        let response = ureq::get(url.as_str())
-            .timeout(Duration::from_secs(30))
-            .call();
+    pub(crate) fn check(server: &Server, group_id: &str, artifact: &str) -> Result<Versions> {
+        let url = url(&server.url, group_id, artifact)
+            .ok_or_else(|| eyre!("Invalid resolver: {}", Paint::red(&server.url).bold()))?;
+
+        let mut request = ureq::get(url.as_str());
+        if let Some((user, pass)) = &server.auth {
+            request.auth(user, pass);
+        }
+
+        let response = request.timeout(Duration::from_secs(30)).call();
         if response.status() == 404 {
             Err(eyre!(
                 "The coordinates {}:{} could not be found on the maven central server at {}",
                 Paint::red(group_id).bold(),
                 Paint::red(artifact).bold(),
-                Paint::cyan(resolver)
+                Paint::cyan(&server.url)
             ))
             .suggestion("Provide existing coordinates.")?;
         }
