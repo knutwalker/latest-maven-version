@@ -1,6 +1,6 @@
 [package]
 name = "latest-maven-version"
-version = "0.1.0"
+version = "0.2.0"
 description = "Check maven central for the latest version of some artifact"
 authors = ["Paul Horn <paul.horn@neotechnology.com>"]
 edition = "2018"
@@ -14,7 +14,9 @@ clap = "3.0.0-beta.1"
 color-eyre = "0.5.1"
 dialoguer = "0.6.2"
 eyre = "0.6.0"
+indicatif = "0.15.0"
 itertools = "0.9.0"
+num_cpus = "1.13.0"
 semver = "0.10.0"
 serde = { version = "1.0.115", features = ["derive"] }
 serde-xml-rs = "0.4.0"

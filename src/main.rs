@@ -110,13 +110,14 @@ fn main() -> Result<()> {
 
     let mut opts = opts::Opts::new();
     let server = opts.resolver_server();
-    let include_pre_releases = opts.include_pre_releases();
-
+    let config = opts.config();
     let checks = opts.into_version_checks();
-    let results = checks
-        .into_iter()
-        .map(|check| run_check(check, &server, include_pre_releases))
-        .collect::<Result<Vec<_>>>()?;
+
+    let results = if checks.len() == 1 || config.jobs <= 1 {
+        st_run(checks, server, config)?
+    } else {
+        mt_run(checks, server, config)?
+    };
 
     for CheckResult {
         coordinates,
@@ -145,6 +146,76 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn st_run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
+    let results = checks
+        .into_iter()
+        .map(|check| run_check(check, &server, config.include_pre_releases))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(results)
+}
+
+fn mt_run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
+    use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Arc,
+        },
+        thread,
+    };
+
+    let spinner_style = ProgressStyle::default_spinner()
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+        .template("{prefix:.bold.dim} {spinner} {wide_msg}");
+
+    let total = checks.len();
+    let threads = total.min(config.jobs);
+
+    let mut slots = vec![vec![]; threads];
+    for (i, check) in checks.into_iter().enumerate() {
+        let bucket = i % threads;
+        slots[bucket].push(check);
+    }
+
+    let (sender, results) = mpsc::channel::<Result<CheckResult>>();
+
+    let current = Arc::new(AtomicUsize::new(0));
+    let server = Arc::new(server);
+    let m = MultiProgress::new();
+
+    for checks in slots {
+        let pb = m.add(ProgressBar::new(total as u64));
+        pb.set_style(spinner_style.clone());
+        let server = Arc::clone(&server);
+        let current = Arc::clone(&current);
+        let sender = sender.clone();
+
+        let _ = thread::spawn(move || {
+            for check in checks {
+                let i = current.fetch_add(1, Ordering::SeqCst);
+                pb.set_prefix(&format!("[{}/{}]", i + 1, total));
+                pb.set_message(&format!(
+                    "{}:{}",
+                    Paint::magenta(&check.coordinates.group_id),
+                    Paint::blue(&check.coordinates.artifact)
+                ));
+                pb.inc(1);
+                let result = run_check(check, &*server, config.include_pre_releases);
+                if sender.send(result).is_err() {
+                    break;
+                }
+            }
+            pb.finish_with_message("waiting...");
+        });
+    }
+
+    m.join_and_clear()?;
+
+    let results = results.try_iter().collect::<Result<Vec<_>>>()?;
+    Ok(results)
+}
+
 fn run_check(
     check: VersionCheck,
     server: &Server,
@@ -169,13 +240,19 @@ struct Server {
     auth: Option<(String, String)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+struct Config {
+    include_pre_releases: bool,
+    jobs: usize,
+}
+
+#[derive(Debug, Clone)]
 struct Coordinates {
     group_id: String,
     artifact: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct VersionCheck {
     coordinates: Coordinates,
     versions: Vec<VersionReq>,
@@ -192,6 +269,7 @@ mod opts {
         AppSettings::{ArgRequiredElseHelp, ColoredHelp, DeriveDisplayOrder, UnifiedHelpMessage},
         Clap,
     };
+    use std::num::NonZeroUsize;
 
     #[derive(Clap, Debug)]
     #[clap(version, author, about, setting = ArgRequiredElseHelp, setting = ColoredHelp, setting = DeriveDisplayOrder, setting = UnifiedHelpMessage)]
@@ -230,6 +308,10 @@ mod opts {
         /// However, if not provided, but a username has been, the password will be read from a secure prompt.
         #[clap(short, long, requires = "user", alias = "password")]
         pass: Option<String>,
+
+        /// When multiple coordinates are given, query at most <jobs> at once. Defaults to the number of physical CPU cores.
+        #[clap(short, long)]
+        jobs: Option<NonZeroUsize>,
     }
 
     fn parse_coordinates(input: &str) -> Result<VersionCheck> {
@@ -293,8 +375,17 @@ mod opts {
             Some((user, pass))
         }
 
-        pub(crate) fn include_pre_releases(&self) -> bool {
-            self.include_pre_releases
+        pub(crate) fn config(&self) -> Config {
+            Config {
+                include_pre_releases: self.include_pre_releases,
+                jobs: self.jobs(),
+            }
+        }
+
+        fn jobs(&self) -> usize {
+            self.jobs
+                .map(|jobs| jobs.get())
+                .unwrap_or_else(num_cpus::get_physical)
         }
 
         pub(crate) fn into_version_checks(self) -> Vec<VersionCheck> {
