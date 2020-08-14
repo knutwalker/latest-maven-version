@@ -97,15 +97,13 @@
 extern crate eyre;
 
 use color_eyre::Help;
+use console::{style, Term};
 use eyre::{Context, Result};
 use semver::{Version, VersionReq};
-use yansi::Paint;
 
 fn main() -> Result<()> {
-    if atty::is(atty::Stream::Stdout) {
-        color_eyre::install()?;
-    } else {
-        Paint::disable();
+    if Term::stdout().features().is_attended() {
+        color_eyre::install()?
     }
 
     let mut opts = opts::Opts::new();
@@ -126,19 +124,19 @@ fn main() -> Result<()> {
     {
         println!(
             "Latest version(s) for {}:{}:",
-            Paint::magenta(coordinates.group_id),
-            Paint::blue(coordinates.artifact)
+            style(coordinates.group_id).magenta(),
+            style(coordinates.artifact).blue()
         );
 
         for (req, latest) in versions {
             if let Some(latest) = latest {
                 println!(
                     "Latest version matching {}: {}",
-                    Paint::cyan(req).bold(),
-                    Paint::green(latest).bold()
+                    style(req).cyan().bold(),
+                    style(latest).green().bold()
                 );
             } else {
-                println!("No version matching {}", Paint::yellow(req).bold());
+                println!("No version matching {}", style(req).yellow().bold());
             }
         }
     }
@@ -197,8 +195,8 @@ fn mt_run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<V
                 pb.set_prefix(&format!("[{}/{}]", i + 1, total));
                 pb.set_message(&format!(
                     "{}:{}",
-                    Paint::magenta(&check.coordinates.group_id),
-                    Paint::blue(&check.coordinates.artifact)
+                    style(&check.coordinates.group_id).magenta(),
+                    style(&check.coordinates.artifact).blue()
                 ));
                 pb.inc(1);
                 let result = run_check(check, &*server, config.include_pre_releases);
@@ -320,14 +318,14 @@ mod opts {
             Some(group_id) => String::from(group_id),
             None => bail!(
                 "The coordinates {} are invalid. Expected at least two elements, but got nothing.",
-                Paint::red(input)
+                style(input).red()
             ),
         };
         let artifact = match segments.next() {
             Some(artifact_id) => String::from(artifact_id),
             None => bail!(
                 "The coordinates {} are invalid. Expected at least two elements, but got only one.",
-                Paint::red(input)
+                style(input).red()
             ),
         };
 
@@ -340,7 +338,7 @@ mod opts {
 
     fn parse_version(version: &str) -> Result<VersionReq> {
         VersionReq::parse(version)
-            .wrap_err(format!("Could not parse {} into a semantic version range.", Paint::red(version)))
+            .wrap_err(format!("Could not parse {} into a semantic version range.", style(version).red()))
             .suggestion("Provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax")
     }
 
@@ -365,7 +363,7 @@ mod opts {
                 None => {
                     use dialoguer::Password;
                     Password::new()
-                        .with_prompt(format!("Password for {}", Paint::cyan(&user)))
+                        .with_prompt(format!("Password for {}", style(&user).cyan()))
                         .allow_empty_password(true)
                         .interact()
                         .ok()?
@@ -413,7 +411,7 @@ mod mvnmeta {
 
     pub(crate) fn check(server: &Server, group_id: &str, artifact: &str) -> Result<Versions> {
         let url = url(&server.url, group_id, artifact)
-            .ok_or_else(|| eyre!("Invalid resolver: {}", Paint::red(&server.url).bold()))?;
+            .ok_or_else(|| eyre!("Invalid resolver: {}", style(&server.url).red().bold()))?;
 
         let mut request = ureq::get(url.as_str());
         if let Some((user, pass)) = &server.auth {
@@ -424,9 +422,9 @@ mod mvnmeta {
         if response.status() == 404 {
             Err(eyre!(
                 "The coordinates {}:{} could not be found on the maven central server at {}",
-                Paint::red(group_id).bold(),
-                Paint::red(artifact).bold(),
-                Paint::cyan(&server.url)
+                style(group_id).red().bold(),
+                style(artifact).red().bold(),
+                style(&server.url).cyan()
             ))
             .suggestion("Provide existing coordinates.")?;
         }
