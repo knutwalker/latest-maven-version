@@ -5,7 +5,7 @@ use clap::{
 };
 use console::style;
 use semver::{ReqParseError, VersionReq};
-use std::{fmt::Display, num::NonZeroUsize};
+use std::fmt::Display;
 
 #[derive(Clap, Debug)]
 #[clap(version, author, about, setting = ArgRequiredElseHelp, setting = ColoredHelp, setting = DeriveDisplayOrder, setting = UnifiedHelpMessage)]
@@ -46,8 +46,9 @@ pub(crate) struct Opts {
     pass: Option<String>,
 
     /// When multiple coordinates are given, query at most <jobs> at once. Defaults to the number of physical CPU cores.
-    #[clap(short, long)]
-    jobs: Option<NonZeroUsize>,
+    #[cfg(feature = "parallel")]
+    #[cfg_attr(feature = "parallel", clap(short, long))]
+    jobs: Option<std::num::NonZeroUsize>,
 }
 
 #[non_exhaustive]
@@ -114,10 +115,12 @@ impl Opts {
     pub(crate) fn config(&self) -> Config {
         Config {
             include_pre_releases: self.include_pre_releases,
+            #[cfg(feature = "parallel")]
             jobs: self.jobs(),
         }
     }
 
+    #[cfg(feature = "parallel")]
     fn jobs(&self) -> usize {
         self.jobs
             .map(|jobs| jobs.get())

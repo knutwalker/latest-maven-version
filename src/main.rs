@@ -93,9 +93,8 @@
 //!     Latest version matching *: 4.1.1
 //!
 //!
-use color_eyre::Help;
+use color_eyre::{eyre::Result, Help};
 use console::{style, Term};
-use eyre::Result;
 use semver::{Version, VersionReq};
 use versions::Versions;
 
@@ -113,11 +112,7 @@ fn main() -> Result<()> {
     let config = opts.config();
     let checks = opts.into_version_checks();
 
-    let results = if checks.len() == 1 || config.jobs <= 1 {
-        st_run(checks, server, config)?
-    } else {
-        mt_run(checks, server, config)?
-    };
+    let results = run(checks, server, config)?;
 
     for CheckResult {
         coordinates,
@@ -146,6 +141,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "parallel"))]
+fn run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
+    st_run(checks, server, config)
+}
+
 fn st_run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
     let results = checks
         .into_iter()
@@ -155,7 +155,12 @@ fn st_run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<V
     Ok(results)
 }
 
-fn mt_run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
+#[cfg(feature = "parallel")]
+fn run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
+    if checks.len() == 1 || config.jobs <= 1 {
+        return st_run(checks, server, config);
+    };
+
     use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
     use std::{
         sync::{
@@ -267,6 +272,7 @@ struct Server {
 #[derive(Debug, Clone, Copy)]
 struct Config {
     include_pre_releases: bool,
+    #[cfg(feature = "parallel")]
     jobs: usize,
 }
 
