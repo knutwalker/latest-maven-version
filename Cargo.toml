@@ -25,3 +25,6 @@ url = "2.1.1"
 
 [features]
 parallel = ["indicatif", "num_cpus"]
+
+[dev-dependencies]
+test-case = "1.0.0"

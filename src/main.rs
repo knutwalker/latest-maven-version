@@ -276,13 +276,13 @@ struct Config {
     jobs: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Coordinates {
     group_id: String,
     artifact: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct VersionCheck {
     coordinates: Coordinates,
     versions: Vec<VersionReq>,
