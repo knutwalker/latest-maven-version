@@ -32,3 +32,10 @@ test-case = "1.0.0"
 [profile.dev.package.backtrace]
 opt-level = 3
 
+[profile.release]
+codegen-units = 1
+debug = false
+debug-assertions = false
+lto = true
+opt-level = 2
+rpath = false
