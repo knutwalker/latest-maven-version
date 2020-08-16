@@ -28,3 +28,7 @@ parallel = ["indicatif", "num_cpus"]
 
 [dev-dependencies]
 test-case = "1.0.0"
+
+[profile.dev.package.backtrace]
+opt-level = 3
+
