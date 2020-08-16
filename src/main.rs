@@ -93,13 +93,14 @@
 //!     Latest version matching *: 4.1.1
 //!
 //!
-use color_eyre::{eyre::Result, Help};
+use color_eyre::eyre::Result;
 use console::{style, Term};
+use resolvers::{Client, Resolver, UreqClient, UrlResolver};
 use semver::{Version, VersionReq};
 use versions::Versions;
 
-mod mvnmeta;
 mod opts;
+mod resolvers;
 mod versions;
 
 fn main() -> Result<()> {
@@ -108,11 +109,15 @@ fn main() -> Result<()> {
     }
 
     let mut opts = opts::Opts::new();
-    let server = opts.resolver_server();
     let config = opts.config();
+
+    let server = opts.resolver_server();
+    let resolver = UrlResolver::new(server.url, server.auth)?;
+    let client = UreqClient::with_default_timeout();
+
     let checks = opts.into_version_checks();
 
-    let results = run(checks, server, config)?;
+    let results = run(resolver, client, config, checks)?;
 
     for CheckResult {
         coordinates,
@@ -142,23 +147,38 @@ fn main() -> Result<()> {
 }
 
 #[cfg(not(feature = "parallel"))]
-fn run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
-    st_run(checks, server, config)
+fn run(
+    resolver: impl Resolver,
+    client: impl Client,
+    config: Config,
+    checks: Vec<VersionCheck>,
+) -> Result<Vec<CheckResult>> {
+    st_run(resolver, client, config, checks)
 }
 
-fn st_run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
+fn st_run(
+    resolver: impl Resolver,
+    client: impl Client,
+    config: Config,
+    checks: Vec<VersionCheck>,
+) -> Result<Vec<CheckResult>> {
     let results = checks
         .into_iter()
-        .map(|check| run_check(check, &server, config.include_pre_releases))
+        .map(|check| run_check(&resolver, &client, config.include_pre_releases, check))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(results)
 }
 
 #[cfg(feature = "parallel")]
-fn run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<CheckResult>> {
+fn run(
+    resolver: impl Resolver + Send + Sync + 'static,
+    client: impl Client + Send + Sync + 'static,
+    config: Config,
+    checks: Vec<VersionCheck>,
+) -> Result<Vec<CheckResult>> {
     if checks.len() == 1 || config.jobs <= 1 {
-        return st_run(checks, server, config);
+        return st_run(resolver, client, config, checks);
     };
 
     use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -186,13 +206,15 @@ fn run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<
     let (sender, results) = mpsc::channel::<Result<CheckResult>>();
 
     let current = Arc::new(AtomicUsize::new(0));
-    let server = Arc::new(server);
+    let resolver = Arc::new(resolver);
+    let client = Arc::new(client);
     let m = MultiProgress::new();
 
     for checks in slots {
         let pb = m.add(ProgressBar::new(total as u64));
         pb.set_style(spinner_style.clone());
-        let server = Arc::clone(&server);
+        let resolver = Arc::clone(&resolver);
+        let client = Arc::clone(&client);
         let current = Arc::clone(&current);
         let sender = sender.clone();
 
@@ -206,7 +228,7 @@ fn run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<
                     style(&check.coordinates.artifact).blue()
                 ));
                 pb.inc(1);
-                let result = run_check(check, &*server, config.include_pre_releases);
+                let result = run_check(&*resolver, &*client, config.include_pre_releases, check);
                 if sender.send(result).is_err() {
                     break;
                 }
@@ -222,40 +244,17 @@ fn run(checks: Vec<VersionCheck>, server: Server, config: Config) -> Result<Vec<
 }
 
 fn run_check(
-    check: VersionCheck,
-    server: &Server,
+    resolver: &impl Resolver,
+    client: &impl Client,
     include_pre_releases: bool,
+    check: VersionCheck,
 ) -> Result<CheckResult> {
     let VersionCheck {
         coordinates,
         versions,
     } = check;
 
-    let all_versions = mvnmeta::check(server, &coordinates.group_id, &coordinates.artifact);
-    let all_versions = match all_versions {
-        Ok(all_versions) => all_versions,
-        Err(err) => match &err {
-            mvnmeta::Error::InvalidResolver(_) => {
-                Err(err).suggestion("Please provide a valid URL as the resolver")?
-            }
-            mvnmeta::Error::CoordinatesNotFound(_, _) => {
-                Err(err).suggestion("Please provide existing coordinates or switch to a different resolver")?
-            }
-            mvnmeta::Error::ClientError(_, _) => {
-                Err(err).suggestion("There is likely something wrong with your request, please check your inputs.")?
-            }
-            mvnmeta::Error::ServerError(_, _) => {
-                Err(err).suggestion("There is likely something wrong with maven central. Please try again later.")?
-            }
-            mvnmeta::Error::ErrorWhileReadingError(_) => {
-                Err(err).suggestion("Maybe your internet connection is gone. Maven central could also be down.")?
-            }
-            mvnmeta::Error::ParseXmlError(_) => {
-                Err(err).suggestion("The resolver might not conform to the proper maven metadate format. Please provide a maven conforming resolver.")?
-            }
-        },
-    };
-
+    let all_versions = resolver.resolve(&coordinates, client)?;
     let versions = all_versions.latest_versions(include_pre_releases, versions);
     Ok(CheckResult {
         coordinates,
