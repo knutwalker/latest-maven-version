@@ -30,8 +30,8 @@ uninstall:
 
 # development builds
 check: target/debug/$(APP)
-test: check
-> cargo test --all --all-targets
+test:
+> cargo test --all --all-targets --all-features
 
 # clean build output
 clean:
