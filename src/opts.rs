@@ -12,7 +12,7 @@ use std::fmt::Display;
 
 #[derive(Clap, Debug)]
 #[cfg_attr(test, derive(Default))]
-#[clap(version, author, about, setting = AllowNegativeNumbers, setting = ArgRequiredElseHelp, setting = ColoredHelp, setting = DeriveDisplayOrder, setting = UnifiedHelpMessage)]
+#[clap(version, about, setting = AllowNegativeNumbers, setting = ArgRequiredElseHelp, setting = ColoredHelp, setting = DeriveDisplayOrder, setting = UnifiedHelpMessage)]
 pub(crate) struct Opts {
     /// The maven coordinates to check for. Can be specified multiple times.
     ///
