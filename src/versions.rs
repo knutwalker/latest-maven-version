@@ -2,7 +2,7 @@ use itertools::Itertools;
 use semver::{Version, VersionReq};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 pub(crate) struct Versions {
     version: Vec<String>,
 }

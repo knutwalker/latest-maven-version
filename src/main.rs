@@ -281,6 +281,20 @@ struct Coordinates {
     artifact: String,
 }
 
+impl Coordinates {
+    #[cfg(test)]
+    fn new<T, U>(group_id: T, artifact: U) -> Self
+    where
+        T: Into<String>,
+        U: Into<String>,
+    {
+        Self {
+            group_id: group_id.into(),
+            artifact: artifact.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct VersionCheck {
     coordinates: Coordinates,

@@ -37,9 +37,9 @@ pub(crate) enum ClientError {
     ErrorWhileReadingError(std::io::Error),
 }
 
+#[derive(Debug)]
 pub(crate) struct UrlResolver {
-    server: String,
-    server_url: Url,
+    server: Url,
     auth: Option<(String, String)>,
 }
 
@@ -50,34 +50,30 @@ pub(crate) struct InvalidResolver {
 }
 
 impl UrlResolver {
-    pub(crate) fn new(
-        server: String,
-        auth: Option<(String, String)>,
-    ) -> Result<Self, InvalidResolver> {
-        let url = match Url::parse(server.as_str()) {
+    pub(crate) fn new<T>(server: T, auth: Option<(String, String)>) -> Result<Self, InvalidResolver>
+    where
+        T: Into<String> + AsRef<str>,
+    {
+        let server = match Url::parse(server.as_ref()) {
             Ok(url) => url,
             Err(e) => {
                 return Err(InvalidResolver {
-                    server,
+                    server: server.into(),
                     error: e.to_string(),
                 })
             }
         };
-        if url.cannot_be_a_base() {
+        if server.cannot_be_a_base() {
             return Err(InvalidResolver {
-                server,
+                server: server.to_string(),
                 error: format!("Cannot be a base"),
             });
         }
-        Ok(Self {
-            server,
-            server_url: url,
-            auth,
-        })
+        Ok(Self { server, auth })
     }
 
     fn url(&self, coordinates: &Coordinates) -> Url {
-        let mut url = self.server_url.clone();
+        let mut url = self.server.clone();
 
         url.path_segments_mut()
             .unwrap() // we did check during construction
@@ -101,14 +97,14 @@ impl Resolver for UrlResolver {
                 let err = match ce {
                     ClientError::CoordinatesNotFound(url) => Error::CoordinatesNotFound {
                         coordinates: coordinates.clone(),
-                        server: self.server.clone(),
+                        server: self.server.to_string(),
                         url,
                     },
                     ClientError::ClientError(err) => {
-                        Error::ClientError(self.server.clone(), ErrorResponse(err))
+                        Error::ClientError(self.server.to_string(), ErrorResponse(err))
                     }
                     ClientError::ServerError(err) => {
-                        Error::ServerError(self.server.clone(), ErrorResponse(err))
+                        Error::ServerError(self.server.to_string(), ErrorResponse(err))
                     }
                     ClientError::ErrorWhileReadingError(err) => Error::ErrorWhileReadingError(err),
                 };
@@ -145,6 +141,7 @@ impl Client for UreqClient {
         if response.status() == 404 {
             return Err(ClientError::CoordinatesNotFound(url));
         }
+        // TODO: auth errors
         if response.error() {
             let client_error = response.client_error();
             let body = response.into_string()?;
@@ -248,4 +245,120 @@ struct MetaData {
 #[derive(Debug, Deserialize)]
 struct Versioning {
     versions: Versions,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::RefCell, io::Cursor};
+    use test_case::test_case;
+
+    struct FakeClient<'a> {
+        error: RefCell<Option<ClientError>>,
+        versions: &'a [&'static str],
+    }
+
+    impl From<ClientError> for FakeClient<'_> {
+        fn from(e: ClientError) -> Self {
+            Self {
+                error: RefCell::new(Some(e)),
+                versions: &[],
+            }
+        }
+    }
+
+    impl<'a> From<&'a [&'static str]> for FakeClient<'a> {
+        fn from(versions: &'a [&'static str]) -> Self {
+            Self {
+                error: RefCell::new(None),
+                versions,
+            }
+        }
+    }
+
+    impl<'a> Client for FakeClient<'a> {
+        fn request(
+            &self,
+            _url: Url,
+            _auth: Option<(&str, &str)>,
+        ) -> Result<Box<dyn Read>, ClientError> {
+            let mut error = self.error.borrow_mut();
+            if let Some(error) = error.take() {
+                return Err(error);
+            }
+            let versions = self
+                .versions
+                .iter()
+                .map(|v| format!("<version>{}</version>", v))
+                .collect::<String>();
+
+            let response = format!(
+                r#"
+                <metadata>
+                  <versioning>
+                    <versions>
+                      {}
+                    </versions>
+                  </versioning>
+                </metadata>
+                "#,
+                versions
+            );
+
+            Ok(Box::new(Cursor::new(response)))
+        }
+    }
+
+    #[test]
+    fn test_url_resolver_url() {
+        let resolver = UrlResolver::new("http://example.com", None).unwrap();
+        let url = resolver.url(&Coordinates::new("com.foo", "bar.baz"));
+        assert_eq!(
+            url,
+            Url::parse("http://example.com/com/foo/bar.baz/maven-metadata.xml").unwrap()
+        )
+    }
+
+    #[test]
+    fn test_url_resolver_resolve() {
+        let resolver = UrlResolver::new("http://example.com", None).unwrap();
+        let versions = vec!["1.0.0", "1.3.37", "1.33.7"];
+        let versions = &versions[..];
+        let client = FakeClient::from(versions);
+        let actual = resolver
+            .resolve(&Coordinates::new("com.foo", "bar.baz"), &client)
+            .unwrap();
+
+        assert_eq!(actual, Versions::from(versions));
+    }
+
+    #[test]
+    fn test_url_resolver_failing() {
+        let coordinates = Coordinates::new("foo", "bar");
+        let server = Url::parse("http://example.com").unwrap();
+
+        let resolver = UrlResolver::new(server.to_string(), None).unwrap();
+        let client = FakeClient::from(ClientError::CoordinatesNotFound(server.clone()));
+        let actual = resolver.resolve(&coordinates, &client).unwrap_err();
+
+        if let Error::CoordinatesNotFound {
+            coordinates: actual_coordinates,
+            server: actual_server,
+            url,
+        } = actual
+        {
+            assert_eq!(actual_coordinates, coordinates);
+            assert_eq!(actual_server, server.to_string());
+            assert_eq!(url, server);
+        } else {
+            panic!("Expected CoordinatesNotFound")
+        }
+    }
+
+    #[test_case("http:/foo bar" => "invalid domain character")]
+    #[test_case("foobar" => "relative URL without a base")]
+    #[test_case("data:text/plain,foobar" => "Cannot be a base")]
+    fn test_url_resolver_invalid_url(url: &str) -> String {
+        UrlResolver::new(url, None).unwrap_err().error
+    }
 }
