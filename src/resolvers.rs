@@ -77,7 +77,7 @@ impl UrlResolver {
         if server.cannot_be_a_base() {
             return Err(InvalidResolver {
                 server: server.to_string(),
-                error: format!("Cannot be a base"),
+                error: String::from("Cannot be a base"),
             });
         }
         Ok(Self { server, auth })
@@ -299,8 +299,9 @@ mod tests {
                     ErrorKind::ClientError(e) => Response::new(400, "Bad Request", &e),
                     ErrorKind::ServerError(e) => Response::new(500, "Internal server error", &e),
                     ErrorKind::RequestError(e) => e.into(),
-                    ErrorKind::ReadBodyError(_) => Response::new(500, "Internal server error", ""),
-                    ErrorKind::ParseBodyError(_) => Response::new(500, "Internal server error", ""),
+                    ErrorKind::ReadBodyError(_) | ErrorKind::ParseBodyError(_) => {
+                        Response::new(500, "Internal server error", "")
+                    }
                 }
             } else {
                 let versions = self

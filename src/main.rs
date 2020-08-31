@@ -154,18 +154,18 @@ fn run(
     config: Config,
     checks: Vec<VersionCheck>,
 ) -> Result<Vec<CheckResult>> {
-    st_run(resolver, client, config, checks)
+    st_run(&resolver, &client, config, checks)
 }
 
 fn st_run(
-    resolver: impl Resolver,
-    client: impl Client,
+    resolver: &impl Resolver,
+    client: &impl Client,
     config: Config,
     checks: Vec<VersionCheck>,
 ) -> Result<Vec<CheckResult>> {
     let results = checks
         .into_iter()
-        .map(|check| run_check(&resolver, &client, config.include_pre_releases, check))
+        .map(|check| run_check(resolver, client, config.include_pre_releases, check))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(results)
@@ -178,10 +178,6 @@ fn run(
     config: Config,
     checks: Vec<VersionCheck>,
 ) -> Result<Vec<CheckResult>> {
-    if checks.len() == 1 || config.jobs <= 1 {
-        return st_run(resolver, client, config, checks);
-    };
-
     use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
     use std::{
         sync::{
@@ -191,8 +187,12 @@ fn run(
         thread,
     };
 
+    if checks.len() == 1 || config.jobs <= 1 {
+        return st_run(&resolver, &client, config, checks);
+    };
+
     let spinner_style = ProgressStyle::default_spinner()
-        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+        .tick_chars("\u{2801}\u{2802}\u{2804}\u{2840}\u{2880}\u{2820}\u{2810}\u{2808} ")
         .template("{prefix:.bold.dim} {spinner} {wide_msg}");
 
     let total = checks.len();

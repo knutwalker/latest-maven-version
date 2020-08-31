@@ -66,7 +66,7 @@ pub(crate) enum Error {
 }
 
 fn parse_coordinates(input: &str) -> Result<VersionCheck, Error> {
-    let mut segments = input.split(':').map(|x| x.trim());
+    let mut segments = input.split(':').map(str::trim);
     let group_id = match segments.next() {
         Some(group_id) if !group_id.is_empty() => String::from(group_id),
         _ => return Err(Error::EmptyGroupId(input.into())),
@@ -146,8 +146,7 @@ impl Opts {
     #[cfg(feature = "parallel")]
     fn jobs(&self) -> usize {
         self.jobs
-            .map(|jobs| jobs.get())
-            .unwrap_or_else(num_cpus::get_physical)
+            .map_or_else(num_cpus::get_physical, std::num::NonZeroUsize::get)
     }
 
     pub(crate) fn into_version_checks(self) -> Vec<VersionCheck> {

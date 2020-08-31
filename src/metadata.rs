@@ -70,15 +70,15 @@ impl<'a> Iterator for Parser<'a> {
                     }
                     _ => {}
                 },
-                State::ExpectVersionEnd => match token {
-                    Token::ElementEnd { end: EE::Open, .. } => {
+                State::ExpectVersionEnd => {
+                    if let Token::ElementEnd { end: EE::Open, .. } = token {
                         self.state = State::ExpectVersion;
                     }
-                    _ => {}
-                },
+                }
                 State::ExpectVersion => match token {
-                    Token::Text { text } => return Some(Ok(text.as_str().trim())),
-                    Token::Cdata { text, .. } => return Some(Ok(text.as_str().trim())),
+                    Token::Text { text } | Token::Cdata { text, .. } => {
+                        return Some(Ok(text.as_str().trim()))
+                    }
                     Token::ElementEnd {
                         end: EE::Close(_, _),
                         ..

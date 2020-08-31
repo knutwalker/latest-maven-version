@@ -65,7 +65,7 @@ impl Versions {
             .group_by(|(idx, _)| *idx);
 
         let mut latest = vec![None; requirements.len()];
-        for (pos, versions) in versions_by_req.into_iter() {
+        for (pos, versions) in &versions_by_req {
             let new = versions.map(|(_, vs)| vs).max();
             match &mut latest[pos] {
                 Some(v1) => match new {
@@ -107,7 +107,7 @@ where
     T: Into<String>,
 {
     fn from(items: Vec<T>) -> Self {
-        let version = items.into_iter().map(|x| x.into()).collect_vec();
+        let version = items.into_iter().map(Into::into).collect_vec();
         Self { version }
     }
 }
