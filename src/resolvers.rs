@@ -1,6 +1,7 @@
 use crate::{metadata::Parser, Coordinates, Versions};
 use console::style;
 use std::{fmt::Display, time::Duration};
+use ureq::{Request, Response};
 use url::Url;
 
 pub(crate) trait Resolver {
@@ -14,32 +15,36 @@ pub(crate) enum Error {
         server: String,
         url: Url,
     },
-    ClientError(String, ErrorResponse),
-    ServerError(String, ErrorResponse),
-    ErrorWhileReadingError(std::io::Error),
-    ParseXmlError(xmlparser::Error),
+    ClientError {
+        server: String,
+        url: Url,
+        status: u16,
+        error: String,
+    },
+    ServerError {
+        server: String,
+        url: Url,
+        status: u16,
+        error: String,
+    },
+    ErrorWhileReadingError {
+        server: String,
+        url: Url,
+        status: u16,
+        src: std::io::Error,
+    },
+    ParseXmlError {
+        server: String,
+        url: Url,
+        src: xmlparser::Error,
+    },
 }
 
 #[derive(Debug)]
 pub(crate) struct ErrorResponse(String);
 
 pub(crate) trait Client {
-    fn request<T, F>(
-        &self,
-        url: Url,
-        auth: Option<(&str, &str)>,
-        result_handler: F,
-    ) -> Result<T, ClientError>
-    where
-        F: for<'a> FnOnce(&'a str) -> T;
-}
-
-#[derive(Debug)]
-pub(crate) enum ClientError {
-    CoordinatesNotFound(Url),
-    ClientError(String),
-    ServerError(String),
-    ErrorWhileReadingError(std::io::Error),
+    fn request(&self, request: Request) -> Response;
 }
 
 #[derive(Debug)]
@@ -93,31 +98,62 @@ impl UrlResolver {
 impl Resolver for UrlResolver {
     fn resolve<T: Client>(&self, coordinates: &Coordinates, client: &T) -> Result<Versions, Error> {
         let url = self.url(coordinates);
+        let mut request = ureq::get(url.as_str());
+        if let Some((user, pass)) = &self.auth {
+            request.auth(user, pass);
+        }
 
-        let auth = self.auth.as_ref().map(|a| (a.0.as_str(), a.1.as_str()));
+        let response = client.request(request);
+        let status = response.status();
 
-        let versions = match client.request(url, auth, |resp| Parser::parse_into::<Versions>(resp))
-        {
-            Ok(response) => response?,
-            Err(ce) => {
-                let err = match ce {
-                    ClientError::CoordinatesNotFound(url) => Error::CoordinatesNotFound {
-                        coordinates: coordinates.clone(),
-                        server: self.server.to_string(),
-                        url,
-                    },
-                    ClientError::ClientError(err) => {
-                        Error::ClientError(self.server.to_string(), ErrorResponse(err))
-                    }
-                    ClientError::ServerError(err) => {
-                        Error::ServerError(self.server.to_string(), ErrorResponse(err))
-                    }
-                    ClientError::ErrorWhileReadingError(err) => Error::ErrorWhileReadingError(err),
-                };
-                return Err(err);
-            }
-        };
+        if status == 404 {
+            return Err(Error::CoordinatesNotFound {
+                coordinates: coordinates.clone(),
+                server: self.server.to_string(),
+                url,
+            });
+        }
 
+        let is_error = response.error();
+        let client_error = response.client_error();
+
+        let body = response
+            .into_string()
+            .map_err(|src| Error::ErrorWhileReadingError {
+                server: self.server.to_string(),
+                url: url.clone(),
+                status,
+                src,
+            })?;
+
+        // TODO: auth errors
+        if is_error {
+            let server = self.server.to_string();
+            let error = body;
+
+            let error = if client_error {
+                Error::ClientError {
+                    server,
+                    url,
+                    status,
+                    error,
+                }
+            } else {
+                Error::ServerError {
+                    server,
+                    url,
+                    status,
+                    error,
+                }
+            };
+            return Err(error);
+        }
+
+        let versions = Parser::parse_into(&body).map_err(|src| Error::ParseXmlError {
+            server: self.server.to_string(),
+            url,
+            src,
+        })?;
         Ok(versions)
     }
 }
@@ -136,57 +172,8 @@ impl UreqClient {
 }
 
 impl Client for UreqClient {
-    fn request<T, F>(
-        &self,
-        url: Url,
-        auth: Option<(&str, &str)>,
-        result_handler: F,
-    ) -> Result<T, ClientError>
-    where
-        F: for<'a> FnOnce(&'a str) -> T,
-    {
-        let mut request = ureq::get(url.as_str());
-        if let Some((user, pass)) = auth {
-            request.auth(user, pass);
-        }
-
-        let response = request.timeout(self.timeout).call();
-        if response.status() == 404 {
-            return Err(ClientError::CoordinatesNotFound(url));
-        }
-        // TODO: auth errors
-        if response.error() {
-            let client_error = response.client_error();
-            let body = response.into_string()?;
-
-            let err = if client_error {
-                ClientError::ClientError(body)
-            } else {
-                ClientError::ServerError(body)
-            };
-            return Err(err);
-        }
-
-        let response: String = response.into_string()?;
-        Ok(result_handler(&response))
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(source: std::io::Error) -> Self {
-        Error::ErrorWhileReadingError(source)
-    }
-}
-
-impl From<xmlparser::Error> for Error {
-    fn from(source: xmlparser::Error) -> Self {
-        Error::ParseXmlError(source)
-    }
-}
-
-impl From<std::io::Error> for ClientError {
-    fn from(source: std::io::Error) -> Self {
-        ClientError::ErrorWhileReadingError(source)
+    fn request(&self, mut request: Request) -> Response {
+        request.timeout(self.timeout).call()
     }
 }
 
@@ -195,26 +182,43 @@ impl Display for Error {
         match self {
             Error::CoordinatesNotFound { coordinates, server, url } => write!(
                 f,
-                "The coordinates {}:{} could not be found using the resolver {}. This could be because the coordinates do not exist or because the server does not follow maven style publication. The following URL was tried and resulted in a 404: {}",
+                "The coordinates {}:{} could not be found using the resolver {}.\nThis could be because the coordinates do not exist or because the server does not follow maven style publication.\nThe following URL was tried and resulted in a 404: {}",
                 style(&coordinates.group_id).red().bold(),
                 style(&coordinates.artifact).red().bold(),
                 style(server).cyan(),
                 style(url).cyan().bold()
             ),
-            Error::ClientError(url, _) => write!(
+            Error::ClientError { server, url, status, error } => write!(
                 f,
-                "Could not read Maven metadata using the resolver {}. There is likely something wrong with your request, please check your inputs.",
-                style(url).cyan()
+                "Could not read Maven metadata using the resolver {}.\nThere is likely something wrong with your request, please check your inputs.\nThe URL '{}' was tried and resulted in a {} with the body\n\n{}",
+                style(server).cyan(),
+                style(url).cyan().bold(),
+                style(*status).yellow().bold(),
+                error
             ),
-            Error::ServerError(url, _) => write!(
+            Error::ServerError { server, url, status, error } => write!(
                 f,
-                "Could not read Maven metadata using the resolver {}. There is likely something wrong with Maven central. Please try again later.",
-                style(url).cyan()
+                "Could not read Maven metadata using the resolver {}.\nThere is likely something wrong with Maven central.\nThe URL '{}' was tried and resulted in a {} with the body\n\n{}\n\nIt's probably best to try later.",
+                style(server).cyan(),
+                style(url).cyan().bold(),
+                style(*status).red().bold(),
+                error
             ),
-            Error::ErrorWhileReadingError(_) => {
-                write!(f, "Could not read the error response from Maven central. Maybe your internet connection is gone. Maven central could also be down.")
-            }
-            Error::ParseXmlError(_) => write!(f, "Unable to parse Maven metadata XML file. The resolver might not conform to the proper maven metadate format."),
+            Error::ErrorWhileReadingError { server, url, status, src, } => write!(
+                f,
+                "Could not read Maven metadata using the resolver {}.\nThe response could not be read or was not valid UTF-8.\nMaybe your internet connection is gone?\nMaven central could also be down.\nThe URL '{}' was tried and resulted in a {} while producing the following error\n\n{}",
+                style(server).cyan(),
+                style(url).cyan().bold(),
+                style(*status).red().bold(),
+                style(src).red()
+            ),
+            Error::ParseXmlError { server, url, src, } => write!(
+                f,
+                "Unable to parse Maven metadata XML file.\nThe resolver {} might not conform to the proper maven metadata format.\nThe URL '{}' was tried and resulted the following error\n\n{}",
+                style(server).cyan(),
+                style(url).cyan().bold(),
+                style(src).red()
+            ),
         }
     }
 }
@@ -239,10 +243,8 @@ impl Display for ErrorResponse {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::ClientError(_, src) => Some(src),
-            Error::ServerError(_, src) => Some(src),
-            Error::ErrorWhileReadingError(src) => Some(src),
-            Error::ParseXmlError(src) => Some(src),
+            Error::ErrorWhileReadingError { src, .. } => Some(src),
+            Error::ParseXmlError { src, .. } => Some(src),
             _ => None,
         }
     }
@@ -258,12 +260,12 @@ mod tests {
     use test_case::test_case;
 
     struct FakeClient<'a> {
-        error: RefCell<Option<ClientError>>,
+        error: RefCell<Option<Error>>,
         versions: &'a [&'static str],
     }
 
-    impl From<ClientError> for FakeClient<'_> {
-        fn from(e: ClientError) -> Self {
+    impl From<Error> for FakeClient<'_> {
+        fn from(e: Error) -> Self {
             Self {
                 error: RefCell::new(Some(e)),
                 versions: &[],
@@ -281,39 +283,46 @@ mod tests {
     }
 
     impl<'a> Client for FakeClient<'a> {
-        fn request<T, F>(
-            &self,
-            _url: Url,
-            _auth: Option<(&str, &str)>,
-            result_handler: F,
-        ) -> Result<T, ClientError>
-        where
-            F: for<'r> FnOnce(&'r str) -> T,
-        {
+        fn request(&self, _request: Request) -> Response {
             let mut error = self.error.borrow_mut();
             if let Some(error) = error.take() {
-                return Err(error);
+                match error {
+                    Error::CoordinatesNotFound { url, .. } => {
+                        Response::new(404, "Not Found", &url.to_string())
+                    }
+                    Error::ClientError { status, error, .. } => {
+                        Response::new(status, "Bad Request", &error)
+                    }
+                    Error::ServerError { status, error, .. } => {
+                        Response::new(status, "Internal server error", &error)
+                    }
+                    Error::ErrorWhileReadingError { .. } => {
+                        Response::new(500, "Internal server error", "")
+                    }
+                    Error::ParseXmlError { .. } => Response::new(500, "Internal server error", ""),
+                }
+            } else {
+                let versions = self
+                    .versions
+                    .iter()
+                    .map(|v| format!("<version>{}</version>", v))
+                    .collect::<String>();
+
+                let response = format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+                    <metadata>
+                      <versioning>
+                        <versions>
+                          {}
+                        </versions>
+                      </versioning>
+                    </metadata>
+                    "#,
+                    versions
+                );
+
+                Response::new(200, "OK", &response)
             }
-            let versions = self
-                .versions
-                .iter()
-                .map(|v| format!("<version>{}</version>", v))
-                .collect::<String>();
-
-            let response = format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-                <metadata>
-                  <versioning>
-                    <versions>
-                      {}
-                    </versions>
-                  </versioning>
-                </metadata>
-                "#,
-                versions
-            );
-
-            Ok(result_handler(&response))
         }
     }
 
@@ -346,7 +355,13 @@ mod tests {
         let server = Url::parse("http://example.com").unwrap();
 
         let resolver = UrlResolver::new(server.to_string(), None).unwrap();
-        let client = FakeClient::from(ClientError::CoordinatesNotFound(server.clone()));
+
+        let url = resolver.url(&coordinates);
+        let client = FakeClient::from(Error::CoordinatesNotFound {
+            coordinates: coordinates.clone(),
+            server: server.to_string(),
+            url: url.clone(),
+        });
         let actual = resolver.resolve(&coordinates, &client).unwrap_err();
 
         if let Error::CoordinatesNotFound {
@@ -357,7 +372,7 @@ mod tests {
         {
             assert_eq!(actual_coordinates, coordinates);
             assert_eq!(actual_server, server.to_string());
-            assert_eq!(url, server);
+            assert_eq!(url, resolver.url(&coordinates));
         } else {
             panic!("Expected CoordinatesNotFound")
         }
