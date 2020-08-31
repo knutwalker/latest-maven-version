@@ -1,10 +1,24 @@
 use itertools::Itertools;
 use semver::{Version, VersionReq};
-use serde::Deserialize;
+use std::iter::FromIterator;
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Versions {
     version: Vec<String>,
+}
+
+impl FromIterator<String> for Versions {
+    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
+        let version = iter.into_iter().collect();
+        Versions { version }
+    }
+}
+
+impl<'a> FromIterator<&'a str> for Versions {
+    fn from_iter<T: IntoIterator<Item = &'a str>>(iter: T) -> Self {
+        let version = iter.into_iter().map(String::from).collect();
+        Versions { version }
+    }
 }
 
 impl Versions {

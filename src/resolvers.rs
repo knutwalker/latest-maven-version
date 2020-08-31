@@ -1,8 +1,6 @@
-use crate::{Coordinates, Versions};
+use crate::{metadata::Metadata, Coordinates, Versions};
 use console::style;
-use serde::Deserialize;
-use serde_xml_rs as xml;
-use std::{fmt::Display, io::Read, time::Duration};
+use std::{fmt::Display, time::Duration};
 use url::Url;
 
 pub(crate) trait Resolver {
@@ -19,14 +17,14 @@ pub(crate) enum Error {
     ClientError(String, ErrorResponse),
     ServerError(String, ErrorResponse),
     ErrorWhileReadingError(std::io::Error),
-    ParseXmlError(xml::Error),
+    ParseXmlError(xmlparser::Error),
 }
 
 #[derive(Debug)]
 pub(crate) struct ErrorResponse(String);
 
 pub(crate) trait Client {
-    fn request(&self, url: Url, auth: Option<(&str, &str)>) -> Result<Box<dyn Read>, ClientError>;
+    fn request(&self, url: Url, auth: Option<(&str, &str)>) -> Result<String, ClientError>;
 }
 
 #[derive(Debug)]
@@ -91,7 +89,7 @@ impl Resolver for UrlResolver {
 
         let auth = self.auth.as_ref().map(|a| (a.0.as_str(), a.1.as_str()));
 
-        let response = match client.request(url, auth) {
+        let doc = match client.request(url, auth) {
             Ok(response) => response,
             Err(ce) => {
                 let err = match ce {
@@ -111,8 +109,8 @@ impl Resolver for UrlResolver {
                 return Err(err);
             }
         };
-        let meta_data: MetaData = xml::from_reader(response)?;
-        let versions = meta_data.versioning.versions;
+
+        let versions = Metadata::parse_into(doc)?;
         Ok(versions)
     }
 }
@@ -131,7 +129,7 @@ impl UreqClient {
 }
 
 impl Client for UreqClient {
-    fn request(&self, url: Url, auth: Option<(&str, &str)>) -> Result<Box<dyn Read>, ClientError> {
+    fn request(&self, url: Url, auth: Option<(&str, &str)>) -> Result<String, ClientError> {
         let mut request = ureq::get(url.as_str());
         if let Some((user, pass)) = auth {
             request.auth(user, pass);
@@ -154,7 +152,7 @@ impl Client for UreqClient {
             return Err(err);
         }
 
-        Ok(Box::new(response.into_reader()))
+        Ok(response.into_string()?)
     }
 }
 
@@ -164,8 +162,8 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<xml::Error> for Error {
-    fn from(source: xml::Error) -> Self {
+impl From<xmlparser::Error> for Error {
+    fn from(source: xmlparser::Error) -> Self {
         Error::ParseXmlError(source)
     }
 }
@@ -237,20 +235,10 @@ impl std::error::Error for Error {
 impl std::error::Error for InvalidResolver {}
 impl std::error::Error for ErrorResponse {}
 
-#[derive(Debug, Deserialize)]
-struct MetaData {
-    versioning: Versioning,
-}
-
-#[derive(Debug, Deserialize)]
-struct Versioning {
-    versions: Versions,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, io::Cursor};
+    use std::cell::RefCell;
     use test_case::test_case;
 
     struct FakeClient<'a> {
@@ -277,11 +265,7 @@ mod tests {
     }
 
     impl<'a> Client for FakeClient<'a> {
-        fn request(
-            &self,
-            _url: Url,
-            _auth: Option<(&str, &str)>,
-        ) -> Result<Box<dyn Read>, ClientError> {
+        fn request(&self, _url: Url, _auth: Option<(&str, &str)>) -> Result<String, ClientError> {
             let mut error = self.error.borrow_mut();
             if let Some(error) = error.take() {
                 return Err(error);
@@ -293,7 +277,7 @@ mod tests {
                 .collect::<String>();
 
             let response = format!(
-                r#"
+                r#"<?xml version="1.0" encoding="UTF-8"?>
                 <metadata>
                   <versioning>
                     <versions>
@@ -305,7 +289,7 @@ mod tests {
                 versions
             );
 
-            Ok(Box::new(Cursor::new(response)))
+            Ok(response)
         }
     }
 

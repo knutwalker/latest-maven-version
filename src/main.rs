@@ -99,6 +99,7 @@ use resolvers::{Client, Resolver, UreqClient, UrlResolver};
 use semver::{Version, VersionReq};
 use versions::Versions;
 
+mod metadata;
 mod opts;
 mod resolvers;
 mod versions;
