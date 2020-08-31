@@ -1,4 +1,4 @@
-use crate::{metadata::Metadata, Coordinates, Versions};
+use crate::{metadata::Parser, Coordinates, Versions};
 use console::style;
 use std::{fmt::Display, time::Duration};
 use url::Url;
@@ -24,7 +24,14 @@ pub(crate) enum Error {
 pub(crate) struct ErrorResponse(String);
 
 pub(crate) trait Client {
-    fn request(&self, url: Url, auth: Option<(&str, &str)>) -> Result<String, ClientError>;
+    fn request<T, F>(
+        &self,
+        url: Url,
+        auth: Option<(&str, &str)>,
+        result_handler: F,
+    ) -> Result<T, ClientError>
+    where
+        F: for<'a> FnOnce(&'a str) -> T;
 }
 
 #[derive(Debug)]
@@ -89,8 +96,9 @@ impl Resolver for UrlResolver {
 
         let auth = self.auth.as_ref().map(|a| (a.0.as_str(), a.1.as_str()));
 
-        let doc = match client.request(url, auth) {
-            Ok(response) => response,
+        let versions = match client.request(url, auth, |resp| Parser::parse_into::<Versions>(resp))
+        {
+            Ok(response) => response?,
             Err(ce) => {
                 let err = match ce {
                     ClientError::CoordinatesNotFound(url) => Error::CoordinatesNotFound {
@@ -110,7 +118,6 @@ impl Resolver for UrlResolver {
             }
         };
 
-        let versions = Metadata::parse_into(doc)?;
         Ok(versions)
     }
 }
@@ -129,7 +136,15 @@ impl UreqClient {
 }
 
 impl Client for UreqClient {
-    fn request(&self, url: Url, auth: Option<(&str, &str)>) -> Result<String, ClientError> {
+    fn request<T, F>(
+        &self,
+        url: Url,
+        auth: Option<(&str, &str)>,
+        result_handler: F,
+    ) -> Result<T, ClientError>
+    where
+        F: for<'a> FnOnce(&'a str) -> T,
+    {
         let mut request = ureq::get(url.as_str());
         if let Some((user, pass)) = auth {
             request.auth(user, pass);
@@ -152,7 +167,8 @@ impl Client for UreqClient {
             return Err(err);
         }
 
-        Ok(response.into_string()?)
+        let response: String = response.into_string()?;
+        Ok(result_handler(&response))
     }
 }
 
@@ -265,7 +281,15 @@ mod tests {
     }
 
     impl<'a> Client for FakeClient<'a> {
-        fn request(&self, _url: Url, _auth: Option<(&str, &str)>) -> Result<String, ClientError> {
+        fn request<T, F>(
+            &self,
+            _url: Url,
+            _auth: Option<(&str, &str)>,
+            result_handler: F,
+        ) -> Result<T, ClientError>
+        where
+            F: for<'r> FnOnce(&'r str) -> T,
+        {
             let mut error = self.error.borrow_mut();
             if let Some(error) = error.take() {
                 return Err(error);
@@ -289,7 +313,7 @@ mod tests {
                 versions
             );
 
-            Ok(response)
+            Ok(result_handler(&response))
         }
     }
 

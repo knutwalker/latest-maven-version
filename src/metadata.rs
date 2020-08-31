@@ -1,42 +1,7 @@
 use std::iter::FromIterator;
 use xmlparser::{ElementEnd as EE, Error, Token, Tokenizer};
 
-pub(crate) struct Metadata {
-    doc: String,
-}
-
-impl Metadata {
-    #[inline]
-    pub(crate) fn iter<'a>(&'a self) -> MetadataParser<'a> {
-        self.into_iter()
-    }
-
-    pub(crate) fn parse_into<T>(input: String) -> Result<T, Error>
-    where
-        T: for<'a> FromIterator<&'a str>,
-    {
-        let parser = Self::from(input);
-        parser.iter().collect::<Result<T, Error>>()
-    }
-}
-
-impl<T: Into<String>> From<T> for Metadata {
-    fn from(value: T) -> Self {
-        Metadata { doc: value.into() }
-    }
-}
-
-impl<'a> IntoIterator for &'a Metadata {
-    type Item = Result<&'a str, Error>;
-
-    type IntoIter = MetadataParser<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        MetadataParser::from(&self.doc[..])
-    }
-}
-
-pub(crate) struct MetadataParser<'a> {
+pub(crate) struct Parser<'a> {
     tok: Tokenizer<'a>,
     state: State,
 }
@@ -51,18 +16,17 @@ enum State {
     Eoi,
 }
 
-impl<'a> From<&'a str> for MetadataParser<'a> {
+impl<'a> From<&'a str> for Parser<'a> {
     fn from(input: &'a str) -> Self {
-        MetadataParser {
+        Parser {
             tok: Tokenizer::from(input),
             state: State::ExpectFirstVersionStart,
         }
     }
 }
 
-impl<'a> MetadataParser<'a> {
-    #[cfg(test)]
-    fn parse_into<T>(input: &'a str) -> Result<T, Error>
+impl<'a> Parser<'a> {
+    pub(crate) fn parse_into<T>(input: &'a str) -> Result<T, Error>
     where
         T: FromIterator<&'a str>,
     {
@@ -73,7 +37,7 @@ impl<'a> MetadataParser<'a> {
 
 const VERSION_TAG: &str = "version";
 
-impl<'a> Iterator for MetadataParser<'a> {
+impl<'a> Iterator for Parser<'a> {
     type Item = Result<&'a str, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -142,7 +106,7 @@ mod tests {
     #[test_case("<version></version>"; "version without versions")]
     #[test_case("<versions><version></version></versions>"; "version without content")]
     fn test_empty_xml(input: &str) {
-        let versions = MetadataParser::parse_into::<Vec<_>>(input).unwrap();
+        let versions = Parser::parse_into::<Vec<_>>(input).unwrap();
         assert_eq!(versions, Vec::<&str>::new());
     }
 
@@ -153,7 +117,7 @@ mod tests {
     #[test_case("<versions><version><![CDATA[   1.0.0    ]]></version></versions>" => vec!["1.0.0"]; "1.0.0 in CDATA with whitespace")]
     #[test_case("<versions><version>foo</version></versions>" => vec!["foo"]; "accepts anything")]
     fn test_minimal_xml(input: &str) -> Vec<&str> {
-        MetadataParser::parse_into(input).unwrap()
+        Parser::parse_into(input).unwrap()
     }
 
     #[test]
@@ -197,7 +161,7 @@ mod tests {
         </metadata>
         "#;
 
-        let versions = MetadataParser::parse_into::<Vec<_>>(input).unwrap();
+        let versions = Parser::parse_into::<Vec<_>>(input).unwrap();
         assert_eq!(
             versions,
             vec![
