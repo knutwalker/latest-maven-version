@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 clap = "3.0.0-beta.1"
-color-eyre = { version = "0.5.1", default-features = false }
+color-eyre = { version = "0.5.2", default-features = false }
 # Keep 0.11.3 until dialoguer and indicatif have upgraded
 console = { version = "0.11.3", default-features = false }
 dialoguer = "0.6.2"

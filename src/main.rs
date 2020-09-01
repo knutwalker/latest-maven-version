@@ -106,7 +106,9 @@ mod versions;
 
 fn main() -> Result<()> {
     if Term::stdout().features().is_attended() {
-        color_eyre::install()?
+        color_eyre::config::HookBuilder::default()
+            .display_env_section(false)
+            .install()?
     }
 
     let mut opts = opts::Opts::new();
