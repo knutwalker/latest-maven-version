@@ -1,10 +1,10 @@
-name: release
+name: releases
 
 on:
   push:
     branches:
       - master
-    tags:        
+    tags:
       - *
 
 jobs:
