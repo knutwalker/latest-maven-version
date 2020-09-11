@@ -123,16 +123,14 @@ impl Opts {
 
     #[cfg(not(test))]
     fn ask_pass(user: &str) -> Option<String> {
-        dialoguer::Password::new()
-            .with_prompt(format!("Password for {}", style(user).cyan()))
-            .allow_empty_password(true)
-            .interact()
-            .ok()
+        let prompt = format!("Enter password for [{}]: ", style(user).cyan());
+        rpassword::read_password_from_tty(Some(&prompt)).ok()
     }
 
     #[cfg(test)]
-    fn ask_pass(_user: &str) -> Option<String> {
-        Some("".into())
+    fn ask_pass(user: &str) -> Option<String> {
+        let mut cursor = std::io::Cursor::new(user);
+        rpassword::read_password_with_reader(Some(&mut cursor)).ok()
     }
 
     pub(crate) fn config(&self) -> Config {
