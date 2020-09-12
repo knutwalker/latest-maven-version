@@ -1076,4 +1076,14 @@ mod tests {
             assert!(is_release_identifier(valid));
         }
     }
+
+    #[test]
+    fn test_release_cmp() {
+        assert!(parse_version("1.2.3") == parse_version("1.2.3.Final"));
+        assert!(parse_version("1.2.3") == parse_version("1.2.3.Release"));
+        assert!(parse_version("1.2.3") == parse_version("1.2.3-Final"));
+        assert!(parse_version("1.2.3") == parse_version("1.2.3-Release"));
+        assert!(parse_version("1.2.3") == parse_version("1.2.3+Final"));
+        assert!(parse_version("1.2.3") == parse_version("1.2.3+Release"));
+    }
 }
