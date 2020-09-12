@@ -151,11 +151,11 @@ mod tests {
     }
 
     #[test]
-    fn ignore_wrong_versions() {
+    fn lenient_version_parsing() {
         let versions = Versions::from(["1.0.0", "1.337"].as_ref());
         assert_eq!(
             versions.find_latest_versions(&[VersionReq::any()], false),
-            vec![Some(Version::new(1, 0, 0))]
+            vec![Some(Version::new(1, 337, 0))]
         );
     }
 
