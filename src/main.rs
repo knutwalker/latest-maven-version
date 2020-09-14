@@ -95,15 +95,14 @@
 //!
 use color_eyre::eyre::Result;
 use console::{style, Term};
+use lenient_semver::parse as parse_version;
 use resolvers::{Client, Resolver, UreqClient, UrlResolver};
 use semver::{Version, VersionReq};
-use version_parser::parse_version;
 use versions::Versions;
 
 mod metadata;
 mod opts;
 mod resolvers;
-mod version_parser;
 mod versions;
 
 fn main() -> Result<()> {

@@ -262,6 +262,7 @@ dependencies = [
  "console",
  "indicatif",
  "itertools",
+ "lenient_semver",
  "num_cpus",
  "rpassword",
  "semver",
@@ -276,6 +277,15 @@ name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
+name = "lenient_semver"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "394c6688e8f4b3fee91da1b474a7ac5c49c5abd8398c105da9ad5b755375c7bb"
+dependencies = [
+ "semver",
+]
 
 [[package]]
 name = "libc"
