@@ -1,4 +1,3 @@
-use super::parse_version;
 use itertools::Itertools;
 use semver::{Version, VersionReq};
 use std::iter::FromIterator;
@@ -48,7 +47,7 @@ impl Versions {
         let versions_by_req = self
             .version
             .iter()
-            .filter_map(|v| parse_version(v.as_str()).ok())
+            .filter_map(|v| lenient_semver::parse::<Version>(v.as_str()).ok())
             .filter_map(|v| {
                 if allow_pre_release {
                     let version = Version::new(v.major, v.minor, v.patch);

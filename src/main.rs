@@ -95,7 +95,6 @@
 //!
 use color_eyre::eyre::Result;
 use console::{style, Term};
-use lenient_semver::parse as parse_version;
 use resolvers::{Client, Resolver, UreqClient, UrlResolver};
 use semver::{Version, VersionReq};
 use versions::Versions;

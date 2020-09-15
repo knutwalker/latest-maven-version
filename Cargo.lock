@@ -280,9 +280,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lenient_semver"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "394c6688e8f4b3fee91da1b474a7ac5c49c5abd8398c105da9ad5b755375c7bb"
+checksum = "3d08943f465b8087edbb577968d903db4850dd2337a5015427de99fd9e70206d"
 dependencies = [
  "semver",
 ]
