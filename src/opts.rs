@@ -206,7 +206,7 @@ mod tests {
     fn test_empty_version_arg() {
         let err = Opts::of(&[""]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, Some(vec!["version-checks".into()]));
+        assert_eq!(err.info, vec![String::from("<version-checks>...")]);
     }
 
     #[test_case("foo:bar", "foo", "bar"; "case1")]
@@ -256,8 +256,8 @@ mod tests {
         let err = Opts::of(&[arg]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ValueValidation);
         assert_eq!(
-            err.cause,
-            format!("Invalid value for '<version-checks>...': {}", msg)
+            err.to_string(),
+            format!("error: Invalid value for '<version-checks>...': {}\n\nFor more information try --help\n", msg)
         );
     }
 
@@ -306,8 +306,8 @@ mod tests {
         let err = Opts::of(&[arg]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ValueValidation);
         assert_eq!(
-            err.cause,
-            format!("Invalid value for '<version-checks>...': Could not parse {} into a semantic version range. Please provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax", spec)
+            err.to_string(),
+            format!("error: Invalid value for '<version-checks>...': Could not parse {} into a semantic version range. Please provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax\n\nFor more information try --help\n", spec)
         );
     }
 
@@ -348,7 +348,7 @@ mod tests {
     fn test_resolver_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, Some(vec!["resolver".into()]));
+        assert_eq!(err.info, vec![String::from("--resolver <resolver>")]);
     }
 
     #[test]
@@ -374,7 +374,7 @@ mod tests {
     fn test_user_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, Some(vec!["user".into()]));
+        assert_eq!(err.info, vec![String::from("--user <user>")]);
     }
 
     #[test]
@@ -394,7 +394,10 @@ mod tests {
     fn test_password_missing_value() {
         let err = Opts::of(&["--user", "Alice", "--insecure-password"]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, Some(vec!["insecure-password".into()]));
+        assert_eq!(
+            err.info,
+            vec![String::from("--insecure-password <insecure-password>")]
+        );
     }
 
     #[cfg(feature = "parallel")]
@@ -420,8 +423,8 @@ mod tests {
         let err = Opts::of(&["--jobs", "0"]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ValueValidation);
         assert_eq!(
-            err.cause,
-            "Invalid value for '--jobs <jobs>': number would be zero for non-zero type"
+            err.to_string(),
+            "error: Invalid value for '--jobs <jobs>': number would be zero for non-zero type\n\nFor more information try --help\n"
         );
     }
 
@@ -433,8 +436,8 @@ mod tests {
         let err = Opts::of(&["--jobs", arg]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ValueValidation);
         assert_eq!(
-            err.cause,
-            "Invalid value for '--jobs <jobs>': invalid digit found in string"
+            err.to_string(),
+            "error: Invalid value for '--jobs <jobs>': invalid digit found in string\n\nFor more information try --help\n"
         );
     }
 
@@ -444,6 +447,6 @@ mod tests {
     fn test_jobs_option_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, Some(vec!["jobs".into()]));
+        assert_eq!(err.info, vec![String::from("--jobs <jobs>")]);
     }
 }
