@@ -274,7 +274,8 @@ mod tests {
     #[test_case("foo:bar:>1.2.3", vec![">1.2.3"]; "gt version")]
     #[test_case("foo:bar:<=1.2.3", vec!["<=1.2.3"]; "lte version")]
     #[test_case("foo:bar:>=1.2.3", vec![">=1.2.3"]; "gte version")]
-    #[test_case("foo:bar:1.2.3,2", vec!["1.2.3,2"]; "multi range")]
+    #[test_case("foo:bar:1.2.3 2", vec!["1.2.3 2"]; "multi range with space")]
+    #[test_case("foo:bar:1.2.3||2", vec!["1.2.3||2"]; "multi range with or")]
     #[test_case("foo:bar:1.2.3:2", vec!["1.2.3", "2"]; "multiple ranges")]
     fn test_version_arg_range(arg: &str, ranges: Vec<&str>) {
         let ranges = ranges
@@ -301,6 +302,7 @@ mod tests {
     #[test_case("foo:bar:*42", "*42"; "mixed star and version")]
     #[test_case("foo:bar:1.3.3.7", "1.3.3.7"; "4 segments")]
     #[test_case("foo:bar:1:foo", "foo"; "second version fails")]
+    #[test_case("foo:bar:1.2.3,2", "1.2.3,2"; "multi range with comma separator")]
     fn test_version_arg_invalid_range(arg: &str, spec: &str) {
         console::set_colors_enabled(false);
         let err = Opts::of(&[arg]).unwrap_err();
