@@ -1,7 +1,7 @@
 use crate::{metadata::Parser, Coordinates, Versions};
 use console::style;
 use std::{fmt::Display, time::Duration};
-use ureq::{Request, Response};
+use ureq::{Agent, Response};
 use url::Url;
 
 pub(crate) trait Resolver {
@@ -45,7 +45,24 @@ impl ErrorKind {
 pub(crate) struct ErrorResponse(String);
 
 pub(crate) trait Client {
-    fn request(&self, request: Request) -> Response;
+    type ReqBuilder: RequestBuilder;
+
+    fn get(&self, url: &Url) -> Self::ReqBuilder;
+}
+
+pub(crate) trait RequestBuilder {
+    type Err: Into<ureq::Error> + std::fmt::Debug;
+
+    fn auth(&mut self, user: &str, pass: &str) {
+        let header = format!("{}:{}", user, pass);
+        let header = base64::encode(header);
+        let header = format!("Basic: {}", header);
+        self.set_header("Authorization", &header)
+    }
+
+    fn set_header(&mut self, key: &str, value: &str);
+
+    fn send(self) -> Result<Response, Self::Err>;
 }
 
 #[derive(Debug)]
@@ -99,50 +116,46 @@ impl UrlResolver {
 impl Resolver for UrlResolver {
     fn resolve<T: Client>(&self, coordinates: &Coordinates, client: &T) -> Result<Versions, Error> {
         let url = self.url(coordinates);
-        let mut request = ureq::get(url.as_str());
+
+        let mut request = client.get(&url);
         if let Some((user, pass)) = &self.auth {
             request.auth(user, pass);
         }
 
-        let response = client.request(request);
-        let status = response.status();
+        let response = request.send();
+        let (status, response) = match response {
+            Ok(r) => (200, r),
+            Err(e) => {
+                let e: ureq::Error = e.into();
+                match e {
+                    ureq::Error::Transport(e) => {
+                        return ErrorKind::RequestError(ureq::Error::Transport(e)).into_err(
+                            self.server.clone(),
+                            url,
+                            400,
+                        );
+                    }
+                    ureq::Error::Status(404, _) => {
+                        return ErrorKind::CoordinatesNotFound(coordinates.clone()).into_err(
+                            self.server.clone(),
+                            url,
+                            404,
+                        );
+                    }
+                    ureq::Error::Status(status, response) => (status, response),
+                }
+            }
+        };
 
-        if response.synthetic() {
-            let error = response.synthetic_error();
-            let error = error as *const Option<ureq::Error>;
-            let error = error as *mut Option<ureq::Error>;
-            //   == SAFETY ==
-            // We call `take` on the result which replaces the error value with None before
-            // the request is being dropped. The error is no longer owned by the request
-            // and so will not result in a dangling pointer. We need write access to the request
-            // field but the API only offers a shared reference.
-            // We're also not doing anything with response anymore. We would use something
-            // like into_synthetic_error or just clone the error, but neither option exists.
-            // The only thing the response does is being dropped.
-            // See also: https://github.com/algesten/ureq/issues/126
-            let error = unsafe { &mut *error };
-            let error = error.take().unwrap();
-            return ErrorKind::RequestError(error).into_err(self.server.clone(), url, status);
-        }
-
-        if status == 404 {
-            return ErrorKind::CoordinatesNotFound(coordinates.clone()).into_err(
-                self.server.clone(),
-                url,
-                status,
-            );
-        }
-
-        let is_error = response.error();
-        let client_error = response.client_error();
+        let client_error = status / 100 == 4;
+        let server_error = status / 100 == 5;
 
         let body = response.into_string().map_err(|src| {
             ErrorKind::ReadBodyError(src).err(self.server.clone(), url.clone(), status)
         })?;
 
-        // TODO: auth errors
-        if is_error {
-            let error = if client_error {
+        if client_error || server_error {
+            let error = if status / 100 == 4 {
                 ErrorKind::ClientError(body)
             } else {
                 ErrorKind::ServerError(body)
@@ -156,7 +169,7 @@ impl Resolver for UrlResolver {
     }
 }
 pub(crate) struct UreqClient {
-    timeout: Duration,
+    agent: Agent,
 }
 
 impl UreqClient {
@@ -165,13 +178,37 @@ impl UreqClient {
     }
 
     pub(crate) fn new(timeout: Duration) -> Self {
-        Self { timeout }
+        let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+        Self { agent }
     }
 }
 
 impl Client for UreqClient {
-    fn request(&self, mut request: Request) -> Response {
-        request.timeout(self.timeout).call()
+    type ReqBuilder = UreqRequestBuilder;
+
+    fn get(&self, url: &Url) -> Self::ReqBuilder {
+        let request = self.agent.request_url("GET", url);
+        UreqRequestBuilder {
+            request: Some(request),
+        }
+    }
+}
+
+pub struct UreqRequestBuilder {
+    request: Option<ureq::Request>,
+}
+
+impl RequestBuilder for UreqRequestBuilder {
+    type Err = ureq::Error;
+
+    fn set_header(&mut self, key: &str, value: &str) {
+        let req = self.request.take().unwrap();
+        let req = req.set(key, value);
+        self.request = Some(req);
+    }
+
+    fn send(self) -> Result<Response, Self::Err> {
+        self.request.unwrap().call()
     }
 }
 
@@ -264,18 +301,18 @@ impl std::error::Error for ErrorResponse {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::{cell::RefCell, rc::Rc};
     use test_case::test_case;
 
     struct FakeClient<'a> {
-        error: RefCell<Option<ErrorKind>>,
+        error: Rc<RefCell<Option<ErrorKind>>>,
         versions: &'a [&'static str],
     }
 
     impl From<ErrorKind> for FakeClient<'_> {
         fn from(e: ErrorKind) -> Self {
             Self {
-                error: RefCell::new(Some(e)),
+                error: Rc::new(RefCell::new(Some(e))),
                 versions: &[],
             }
         }
@@ -284,23 +321,43 @@ mod tests {
     impl<'a> From<&'a [&'static str]> for FakeClient<'a> {
         fn from(versions: &'a [&'static str]) -> Self {
             Self {
-                error: RefCell::new(None),
+                error: Rc::new(RefCell::new(None)),
                 versions,
             }
         }
     }
 
     impl<'a> Client for FakeClient<'a> {
-        fn request(&self, _request: Request) -> Response {
+        type ReqBuilder = Self;
+
+        fn get(&self, _url: &Url) -> Self::ReqBuilder {
+            FakeClient {
+                error: Rc::clone(&self.error),
+                versions: self.versions,
+            }
+        }
+    }
+
+    fn error_reponse(status: u16, status_text: &str, body: &str) -> Result<Response, ureq::Error> {
+        let response = Response::new(status, status_text, body).unwrap();
+        Err(ureq::Error::Status(status, response))
+    }
+
+    impl<'a> RequestBuilder for FakeClient<'a> {
+        type Err = ureq::Error;
+
+        fn set_header(&mut self, _key: &str, _value: &str) {}
+
+        fn send(self) -> Result<Response, Self::Err> {
             let mut error = self.error.borrow_mut();
             if let Some(error) = error.take() {
                 match error {
-                    ErrorKind::CoordinatesNotFound(_) => Response::new(404, "Not Found", ""),
-                    ErrorKind::ClientError(e) => Response::new(400, "Bad Request", &e),
-                    ErrorKind::ServerError(e) => Response::new(500, "Internal server error", &e),
-                    ErrorKind::RequestError(e) => e.into(),
+                    ErrorKind::CoordinatesNotFound(_) => error_reponse(404, "Not Found", ""),
+                    ErrorKind::ClientError(e) => error_reponse(400, "Bad Request", &e),
+                    ErrorKind::ServerError(e) => error_reponse(500, "Internal server error", &e),
+                    ErrorKind::RequestError(e) => Err(e),
                     ErrorKind::ReadBodyError(_) | ErrorKind::ParseBodyError(_) => {
-                        Response::new(500, "Internal server error", "")
+                        error_reponse(500, "Internal server error", "")
                     }
                 }
             } else {
