@@ -4,6 +4,8 @@ use console::style;
 use std::fmt::Display;
 use url::Url;
 
+#[path = "reqwest_resolver.rs"]
+mod reqwest_resolver;
 #[path = "ureq_resolver.rs"]
 mod ureq_resolver;
 
@@ -24,26 +26,38 @@ pub(crate) trait Resolver {
 pub(crate) struct Error {
     resolver: Url,
     url: Url,
-    status: u16,
     error: ErrorKind,
 }
 
 #[derive(Debug)]
 pub(crate) enum ErrorKind {
+    /// Could not send the request because it was not valid
+    InvalidRequest(Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Could not connect to the server
+    ServerNotFound, // (Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Could not read from the server within the given timeout
+    ServerNotAvailable, // (Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Could not read from the serveer for some reason
+    TransportError(Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Response caught in redirect loop
+    TooManyRedirects, // (Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Could not find the coordinates on the server
     CoordinatesNotFound(Coordinates),
-    ClientError(String),
-    ServerError(String),
-    RequestError(ureq::Error),
-    ReadBodyError(std::io::Error),
+    /// Could not read the response body from the server
+    ReadBodyError(u16, Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Any 4xx response
+    ClientError(u16, String),
+    /// Any 5xx response
+    ServerError(u16, String),
+    /// Could not parse the xml response
     ParseBodyError(xmlparser::Error),
 }
 
 impl ErrorKind {
-    fn err(self, resolver: Url, url: Url, status: u16) -> Error {
+    fn err(self, resolver: Url, url: Url) -> Error {
         Error {
             resolver,
             url,
-            status,
             error: self,
         }
     }
@@ -54,33 +68,23 @@ pub(crate) struct ErrorResponse(String);
 
 #[async_trait]
 pub(crate) trait Client: Send + Sync {
-    type Err: IntoError + std::fmt::Debug;
+    type Err: IntoError;
 
     async fn request(
         &self,
         url: &Url,
         auth: Option<&(String, String)>,
-    ) -> Result<(u16, String), Self::Err>;
+        coordinates: &Coordinates,
+    ) -> Result<String, Self::Err>;
 }
 
 pub(crate) trait IntoError {
-    fn into_error(self, coordinates: &Coordinates, server: &Url, url: Url) -> Error;
+    fn into_error(self, coordinates: &Coordinates, resolver: &Url, url: Url) -> Error;
 }
 
 impl IntoError for ErrorKind {
-    fn into_error(self, _coordinates: &Coordinates, server: &Url, url: Url) -> Error {
-        let status = match &self {
-            ErrorKind::CoordinatesNotFound(_) => 404,
-            ErrorKind::ClientError(_) => 400,
-            ErrorKind::ServerError(_) => 500,
-            ErrorKind::RequestError(ureq_error) => match ureq_error {
-                ureq::Error::Status(status, _) => *status,
-                ureq::Error::Transport(_) => 500,
-            },
-            ErrorKind::ReadBodyError(_) => 500,
-            ErrorKind::ParseBodyError(_) => 500,
-        };
-        self.err(server.clone(), url, status)
+    fn into_error(self, _coordinates: &Coordinates, resolver: &Url, url: Url) -> Error {
+        self.err(resolver.clone(), url)
     }
 }
 #[derive(Debug)]
@@ -140,8 +144,8 @@ impl Resolver for UrlResolver {
     ) -> Result<Versions, Error> {
         let url = self.url(coordinates);
 
-        let response = client.request(&url, self.auth.as_ref()).await;
-        let (status, body) = match response {
+        let response = client.request(&url, self.auth.as_ref(), coordinates).await;
+        let body = match response {
             Ok(body) => body,
             Err(err) => {
                 return Err(err.into_error(coordinates, &self.server, url));
@@ -149,7 +153,7 @@ impl Resolver for UrlResolver {
         };
 
         let versions = Parser::parse_into(&body)
-            .map_err(|src| ErrorKind::ParseBodyError(src).err(self.server.clone(), url, status))?;
+            .map_err(|src| ErrorKind::ParseBodyError(src).err(self.server.clone(), url))?;
         Ok(versions)
     }
 }
@@ -159,7 +163,6 @@ impl Display for Error {
         let Error {
             resolver,
             url,
-            status,
             error,
         } = self;
         match error {
@@ -171,33 +174,58 @@ impl Display for Error {
                 style(resolver).cyan(),
                 style(url).cyan().bold()
             ),
-            ErrorKind::ClientError(error) => write!(
+            ErrorKind::ClientError(sc, error) => write!(
                 f,
                 "Could not read Maven metadata using the resolver {}.\nThere is likely something wrong with your request, please check your inputs.\nThe URL '{}' was tried and resulted in a {} with the body\n\n{}",
                 style(resolver).cyan(),
                 style(url).cyan().bold(),
-                style(*status).yellow().bold(),
+                style(*sc).yellow().bold(),
                 error
             ),
-            ErrorKind::ServerError(error) => write!(
+            ErrorKind::ServerError(sc, error) => write!(
                 f,
                 "Could not read Maven metadata using the resolver {}.\nThere is likely something wrong with Maven central.\nThe URL '{}' was tried and resulted in a {} with the body\n\n{}\n\nIt's probably best to try later.",
                 style(resolver).cyan(),
                 style(url).cyan().bold(),
-                style(*status).red().bold(),
+                style(*sc).red().bold(),
                 error
             ),
-            ErrorKind::RequestError(_) => write!(
-                f,
-                "Could not read Maven metadata using the resolver {}.\nThere is likely something wrong with your request, please check your inputs.",
-                style(resolver).cyan(),
-            ),
-            ErrorKind::ReadBodyError(_) => write!(
+            ErrorKind::ReadBodyError(sc, _) => write!(
                 f,
                 "Could not read Maven metadata using the resolver {}.\nThe response could not be read or was not valid UTF-8.\nMaybe your internet connection is gone?\nMaven central could also be down.\nThe URL '{}' was tried and resulted in a {}.",
                 style(resolver).cyan(),
                 style(url).cyan().bold(),
-                style(*status).red().bold(),
+                style(*sc).red().bold(),
+            ),
+            ErrorKind::InvalidRequest(_) => write!(
+                f,
+                "Could not send the request to the resolver.\nThere is probably something wrong the resolver '{}' or the tried URL '{}'.",
+                style(resolver).cyan(),
+                style(url).cyan().bold(),
+            ),
+            ErrorKind::ServerNotFound => write!(
+                f,
+                "Could not connect to the resolver {}.\nMaybe your internet is gone? The resolver could also be down.\nThe URL '{}' was tried.",
+                style(resolver).cyan(),
+                style(url).cyan().bold(),
+            ),
+            ErrorKind::ServerNotAvailable => write!(
+                f,
+                "Did not get a response from the resolver {}.\nMaybe your internet is gone or very slow? The resolver could also be down or under load.\nThe URL '{}' was tried.",
+                style(resolver).cyan(),
+                style(url).cyan().bold(),
+            ),
+            ErrorKind::TransportError(_) => write!(
+                f,
+                "Could not read Maven metadata using the resolver {}.\nThere is likely something wrong with your request, please check your inputs.\nThe URL '{}' was tried.",
+                style(resolver).cyan(),
+                style(url).cyan().bold(),
+            ),
+            ErrorKind::TooManyRedirects => write!(
+                f,
+                "The resolver {} reponded with a redirect loop.\nThere is likely something wrong with your request, please check your inputs.\nThe URL '{}' was tried.",
+                style(resolver).cyan(),
+                style(url).cyan().bold(),
             ),
             ErrorKind::ParseBodyError(_) => write!(
                 f,
@@ -229,8 +257,9 @@ impl Display for ErrorResponse {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.error {
-            ErrorKind::RequestError(src) => Some(src),
-            ErrorKind::ReadBodyError(src) => Some(src),
+            ErrorKind::InvalidRequest(src) => Some(&**src),
+            ErrorKind::TransportError(src) => Some(&**src),
+            ErrorKind::ReadBodyError(_, src) => Some(&**src),
             ErrorKind::ParseBodyError(src) => Some(src),
             _ => None,
         }
@@ -277,7 +306,8 @@ mod tests {
             &self,
             _url: &Url,
             _auth: Option<&(String, String)>,
-        ) -> Result<(u16, String), Self::Err> {
+            _coordinates: &Coordinates,
+        ) -> Result<String, Self::Err> {
             let mut error = self.error.lock().unwrap();
             if let Some(error) = error.take() {
                 Err(error)
@@ -301,7 +331,7 @@ mod tests {
                     versions
                 );
 
-                Ok((200, response))
+                Ok(response)
             }
         }
     }
@@ -343,7 +373,6 @@ mod tests {
         let Error {
             resolver: actual_server,
             url,
-            status: _,
             error,
         } = actual;
         if let ErrorKind::CoordinatesNotFound(actual_coordinates) = error {
