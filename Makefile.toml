@@ -1,0 +1,45 @@
+[tasks.ci]
+run_task = { name = "ci-flow", fork = true }
+
+[tasks.readme]
+command = "cargo"
+args = ["readme", "--output", "README.md"]
+
+[tasks.t]
+run_task = { name = "test", fork = true }
+
+[tasks.r]
+run_task = "readme"
+
+[tasks.outdated]
+args = ["outdated", "--root-deps-only", "--exit-code", "0"]
+
+[tasks.build-mac-universal]
+dependencies = ["bundle-mac-universal"]
+
+[tasks.build-mac-x86_64]
+command = "cargo"
+args = ["build", "--release", "--target=x86_64-apple-darwin"]
+
+[tasks.build-mac-aarch64]
+command = "cargo"
+args = ["build", "--release", "--target=aarch64-apple-darwin"]
+
+[tasks.create-mac-universal-target]
+command = "mkdir"
+args = ["-p", "target/universal-apple-darwin"]
+
+[tasks.bundle-mac-universal]
+command = "lipo"
+args = [
+    "target/x86_64-apple-darwin/release/latest-maven-version",
+    "target/aarch64-apple-darwin/release/latest-maven-version",
+    "-create",
+    "-output",
+    "target/universal-apple-darwin/latest-maven-version-universal-apple-darwin"
+]
+dependencies = [
+    "build-mac-x86_64",
+    "build-mac-aarch64",
+    "create-mac-universal-target"
+]
