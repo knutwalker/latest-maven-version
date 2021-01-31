@@ -28,7 +28,8 @@ impl Client for UreqClient {
         &self,
         url: &Url,
         auth: Option<&(String, String)>,
-    ) -> Result<(u16, String), Self::Err> {
+        _coordinates: &Coordinates,
+    ) -> Result<String, Self::Err> {
         let mut request = self.agent.request_url("GET", url);
 
         if let Some((user, pass)) = auth {
@@ -38,33 +39,32 @@ impl Client for UreqClient {
             request = request.set("Authorization", &header);
         }
 
-        request.call().and_then(|response| {
-            let status = response.status();
-            let body = response.into_string().map_err(|ioe| Error::from(ioe))?;
-            Ok((status, body))
-        })
+        request
+            .call()
+            .and_then(|response| response.into_string().map_err(|ioe| Error::from(ioe)))
     }
 }
 
 impl IntoError for Error {
-    fn into_error(self, coordinates: &Coordinates, server: &Url, url: Url) -> SuperError {
+    fn into_error(self, coordinates: &Coordinates, resolver: &Url, url: Url) -> SuperError {
         match self {
             Error::Transport(e) => {
-                ErrorKind::RequestError(Error::Transport(e)).err(server.clone(), url, 400)
+                ErrorKind::TransportError(Box::new(e)).err(resolver.clone(), url)
             }
             Error::Status(404, _) => {
-                ErrorKind::CoordinatesNotFound(coordinates.clone()).err(server.clone(), url, 404)
+                ErrorKind::CoordinatesNotFound(coordinates.clone()).err(resolver.clone(), url)
             }
             Error::Status(status, response) => match response.into_string() {
                 Ok(body) => {
                     let error = if status / 100 == 4 {
-                        ErrorKind::ClientError(body)
+                        ErrorKind::ClientError(status, body)
                     } else {
-                        ErrorKind::ServerError(body)
+                        ErrorKind::ServerError(status, body)
                     };
-                    error.err(server.clone(), url, status)
+                    error.err(resolver.clone(), url)
                 }
-                Err(src) => ErrorKind::ReadBodyError(src).err(server.clone(), url.clone(), status),
+                Err(src) => ErrorKind::ReadBodyError(status, Box::new(src))
+                    .err(resolver.clone(), url.clone()),
             },
         }
     }
