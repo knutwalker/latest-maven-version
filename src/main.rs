@@ -93,9 +93,11 @@
 //!     Latest version matching *: 4.1.1
 //!
 //!
+use std::sync::Arc;
+
 use color_eyre::eyre::Result;
 use console::{style, Term};
-use resolvers::{Client, Resolver, UreqClient, UrlResolver};
+use resolvers::{Client, Resolver, UrlResolver};
 use semver::{Version, VersionReq};
 use versions::Versions;
 
@@ -104,7 +106,8 @@ mod opts;
 mod resolvers;
 mod versions;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     if Term::stdout().features().is_attended() {
         color_eyre::config::HookBuilder::default()
             .display_env_section(false)
@@ -116,11 +119,11 @@ fn main() -> Result<()> {
 
     let server = opts.resolver_server();
     let resolver = UrlResolver::new(server.url, server.auth)?;
-    let client = UreqClient::with_default_timeout();
+    let client = resolvers::client();
 
     let checks = opts.into_version_checks();
 
-    let results = run(resolver, client, config, checks)?;
+    let results = run(resolver, client, config, checks).await?;
 
     for CheckResult {
         coordinates,
@@ -149,106 +152,44 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "parallel"))]
-fn run(
-    resolver: impl Resolver,
-    client: impl Client,
+async fn run<R, C>(
+    resolver: R,
+    client: C,
     config: Config,
     checks: Vec<VersionCheck>,
-) -> Result<Vec<CheckResult>> {
-    st_run(&resolver, &client, config, checks)
-}
-
-fn st_run(
-    resolver: &impl Resolver,
-    client: &impl Client,
-    config: Config,
-    checks: Vec<VersionCheck>,
-) -> Result<Vec<CheckResult>> {
-    let results = checks
-        .into_iter()
-        .map(|check| run_check(resolver, client, config.include_pre_releases, check))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(results)
-}
-
-#[cfg(feature = "parallel")]
-fn run(
-    resolver: impl Resolver + Send + Sync + 'static,
-    client: impl Client + Send + Sync + 'static,
-    config: Config,
-    checks: Vec<VersionCheck>,
-) -> Result<Vec<CheckResult>> {
-    use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-    use std::{
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            mpsc, Arc,
-        },
-        thread,
-    };
-
-    if checks.len() == 1 || config.jobs <= 1 {
-        return st_run(&resolver, &client, config, checks);
-    };
-
-    let spinner_style = ProgressStyle::default_spinner()
-        .tick_chars("\u{2801}\u{2802}\u{2804}\u{2840}\u{2880}\u{2820}\u{2810}\u{2808} ")
-        .template("{prefix:.bold.dim} {spinner} {wide_msg}");
-
-    let total = checks.len();
-    let threads = total.min(config.jobs);
-
-    let mut slots = vec![vec![]; threads];
-    for (i, check) in checks.into_iter().enumerate() {
-        let bucket = i % threads;
-        slots[bucket].push(check);
-    }
-
-    let (sender, results) = mpsc::channel::<Result<CheckResult>>();
-
-    let current = Arc::new(AtomicUsize::new(0));
+) -> Result<Vec<CheckResult>>
+where
+    R: Resolver + Send + Sync + 'static,
+    C: Client + Send + Sync + 'static,
+{
     let resolver = Arc::new(resolver);
     let client = Arc::new(client);
-    let m = MultiProgress::new();
 
-    for checks in slots {
-        let pb = m.add(ProgressBar::new(total as u64));
-        pb.set_style(spinner_style.clone());
-        let resolver = Arc::clone(&resolver);
-        let client = Arc::clone(&client);
-        let current = Arc::clone(&current);
-        let sender = sender.clone();
+    let tasks = checks
+        .into_iter()
+        .map(|check| {
+            let resolver = Arc::clone(&resolver);
+            let client = Arc::clone(&client);
+            tokio::spawn(run_check(
+                resolver,
+                client,
+                config.include_pre_releases,
+                check,
+            ))
+        })
+        .collect::<Vec<_>>();
 
-        let _ = thread::spawn(move || {
-            for check in checks {
-                let i = current.fetch_add(1, Ordering::SeqCst);
-                pb.set_prefix(&format!("[{}/{}]", i + 1, total));
-                pb.set_message(&format!(
-                    "{}:{}",
-                    style(&check.coordinates.group_id).magenta(),
-                    style(&check.coordinates.artifact).blue()
-                ));
-                pb.inc(1);
-                let result = run_check(&*resolver, &*client, config.include_pre_releases, check);
-                if sender.send(result).is_err() {
-                    break;
-                }
-            }
-            pb.finish_with_message("waiting...");
-        });
+    let mut results = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let result = task.await??;
+        results.push(result);
     }
-
-    m.join_and_clear()?;
-
-    let results = results.try_iter().collect::<Result<Vec<_>>>()?;
     Ok(results)
 }
 
-fn run_check(
-    resolver: &impl Resolver,
-    client: &impl Client,
+async fn run_check(
+    resolver: Arc<impl Resolver>,
+    client: Arc<impl Client>,
     include_pre_releases: bool,
     check: VersionCheck,
 ) -> Result<CheckResult> {
@@ -257,7 +198,7 @@ fn run_check(
         versions,
     } = check;
 
-    let all_versions = resolver.resolve(&coordinates, client)?;
+    let all_versions = resolver.resolve(&coordinates, &*client).await?;
     let versions = all_versions.latest_versions(include_pre_releases, versions);
     Ok(CheckResult {
         coordinates,
