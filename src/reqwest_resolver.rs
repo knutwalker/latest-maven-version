@@ -32,14 +32,12 @@ impl ReqwestClient {
 
 #[async_trait]
 impl CrateClient for ReqwestClient {
-    type Err = ErrorKind;
-
     async fn request(
         &self,
         url: &Url,
         auth: Option<&(String, String)>,
         coordinates: &Coordinates,
-    ) -> Result<String, Self::Err> {
+    ) -> Result<String, ErrorKind> {
         let mut request = self.client.get(url.clone());
 
         if let Some((user, pass)) = auth {
