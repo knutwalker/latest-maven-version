@@ -6,11 +6,9 @@ use url::Url;
 
 #[path = "reqwest_resolver.rs"]
 mod reqwest_resolver;
-#[path = "ureq_resolver.rs"]
-mod ureq_resolver;
 
 pub(crate) fn client() -> impl Client {
-    ureq_resolver::UreqClient::with_default_timeout()
+    reqwest_resolver::ReqwestClient::with_default_timeout()
 }
 
 #[async_trait]
@@ -68,25 +66,14 @@ pub(crate) struct ErrorResponse(String);
 
 #[async_trait]
 pub(crate) trait Client: Send + Sync {
-    type Err: IntoError;
-
     async fn request(
         &self,
         url: &Url,
         auth: Option<&(String, String)>,
         coordinates: &Coordinates,
-    ) -> Result<String, Self::Err>;
+    ) -> Result<String, ErrorKind>;
 }
 
-pub(crate) trait IntoError {
-    fn into_error(self, coordinates: &Coordinates, resolver: &Url, url: Url) -> Error;
-}
-
-impl IntoError for ErrorKind {
-    fn into_error(self, _coordinates: &Coordinates, resolver: &Url, url: Url) -> Error {
-        self.err(resolver.clone(), url)
-    }
-}
 #[derive(Debug)]
 pub(crate) struct UrlResolver {
     server: Url,
@@ -147,9 +134,7 @@ impl Resolver for UrlResolver {
         let response = client.request(&url, self.auth.as_ref(), coordinates).await;
         let body = match response {
             Ok(body) => body,
-            Err(err) => {
-                return Err(err.into_error(coordinates, &self.server, url));
-            }
+            Err(err) => return Err(err.err(self.server.clone(), url)),
         };
 
         let versions = Parser::parse_into(&body)
@@ -300,14 +285,12 @@ mod tests {
 
     #[async_trait]
     impl<'a> Client for FakeClient<'a> {
-        type Err = ErrorKind;
-
         async fn request(
             &self,
             _url: &Url,
             _auth: Option<&(String, String)>,
             _coordinates: &Coordinates,
-        ) -> Result<String, Self::Err> {
+        ) -> Result<String, ErrorKind> {
             let mut error = self.error.lock().unwrap();
             if let Some(error) = error.take() {
                 Err(error)
