@@ -215,8 +215,6 @@ struct Server {
 #[derive(Debug, Clone, Copy)]
 struct Config {
     include_pre_releases: bool,
-    #[cfg(feature = "parallel")]
-    jobs: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
