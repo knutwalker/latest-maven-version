@@ -49,11 +49,6 @@ pub(crate) struct Opts {
     /// However, if not provided, but a username has been, the password will be read from a secure prompt.
     #[clap(long, requires = "user")]
     insecure_password: Option<String>,
-
-    /// When multiple coordinates are given, query at most <jobs> at once. Defaults to the number of physical CPU cores.
-    #[cfg(feature = "parallel")]
-    #[cfg_attr(feature = "parallel", clap(short, long))]
-    jobs: Option<std::num::NonZeroUsize>,
 }
 
 #[non_exhaustive]
@@ -136,15 +131,7 @@ impl Opts {
     pub(crate) fn config(&self) -> Config {
         Config {
             include_pre_releases: self.include_pre_releases,
-            #[cfg(feature = "parallel")]
-            jobs: self.jobs(),
         }
-    }
-
-    #[cfg(feature = "parallel")]
-    fn jobs(&self) -> usize {
-        self.jobs
-            .map_or_else(num_cpus::get_physical, std::num::NonZeroUsize::get)
     }
 
     pub(crate) fn into_version_checks(self) -> Vec<VersionCheck> {
@@ -400,55 +387,5 @@ mod tests {
             err.info,
             vec![String::from("--insecure-password <insecure-password>")]
         );
-    }
-
-    #[cfg(feature = "parallel")]
-    #[test]
-    fn test_default_jobs() {
-        let opts = Opts::default();
-        assert_eq!(opts.jobs, None);
-        assert_eq!(opts.config().jobs, num_cpus::get_physical());
-    }
-
-    #[cfg(feature = "parallel")]
-    #[test_case("-j"; "short flag")]
-    #[test_case("--jobs"; "long flag")]
-    fn test_jobs_option(flag: &str) {
-        let opts = Opts::of(&[flag, "42"]).unwrap();
-        assert_eq!(opts.jobs, std::num::NonZeroUsize::new(42));
-        assert_eq!(opts.config().jobs, 42);
-    }
-
-    #[cfg(feature = "parallel")]
-    #[test]
-    fn test_invalid_jobs_option_zero() {
-        let err = Opts::of(&["--jobs", "0"]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::ValueValidation);
-        assert_eq!(
-            err.to_string(),
-            "error: Invalid value for '--jobs <jobs>': number would be zero for non-zero type\n\nFor more information try --help\n"
-        );
-    }
-
-    #[cfg(feature = "parallel")]
-    #[test_case("-42"; "negative")]
-    #[test_case("13.37"; "float")]
-    #[test_case("lorem"; "string")]
-    fn test_invalid_jobs_options(arg: &str) {
-        let err = Opts::of(&["--jobs", arg]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::ValueValidation);
-        assert_eq!(
-            err.to_string(),
-            "error: Invalid value for '--jobs <jobs>': invalid digit found in string\n\nFor more information try --help\n"
-        );
-    }
-
-    #[cfg(feature = "parallel")]
-    #[test_case("-j"; "short flag")]
-    #[test_case("--jobs"; "long flag")]
-    fn test_jobs_option_missing_value(flag: &str) {
-        let err = Opts::of(&[flag]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, vec![String::from("--jobs <jobs>")]);
     }
 }
