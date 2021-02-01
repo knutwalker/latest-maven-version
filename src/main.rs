@@ -93,12 +93,11 @@
 //!     Latest version matching *: 4.1.1
 //!
 //!
-use std::sync::Arc;
-
 use color_eyre::eyre::Result;
 use console::{style, Term};
 use resolvers::{Client, Resolver, UrlResolver};
 use semver::{Version, VersionReq};
+use std::sync::Arc;
 use versions::Versions;
 
 mod metadata;

@@ -5,7 +5,6 @@ use reqwest::{Client, StatusCode};
 use std::time::Duration;
 use url::Url;
 
-// Name your user agent after your app?
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 pub(super) struct ReqwestClient {
@@ -47,7 +46,6 @@ impl CrateClient for ReqwestClient {
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
-                eprintln!("error = {0:#?}: {0}", error);
                 return Err(if error.is_builder() {
                     ErrorKind::InvalidRequest(Box::new(error))
                 } else if error.is_connect() {
@@ -70,7 +68,6 @@ impl CrateClient for ReqwestClient {
         let body = match response.text().await {
             Ok(body) => body,
             Err(error) => {
-                eprintln!("error = {0:#?}: {0}", error);
                 return Err(ErrorKind::ReadBodyError(status.as_u16(), Box::new(error)));
             }
         };
