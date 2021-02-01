@@ -9,7 +9,6 @@ on:
       - master
   workflow_dispatch:
 
-
 jobs:
   checks:
     name: Tests and clippy checks
@@ -30,6 +29,8 @@ jobs:
           override: true
       - name: Install cargo-make
         uses: davidB/rust-cargo-make@v1
+        with:
+          version: "0.32.12"
       - name: Run CI
         uses: actions-rs/cargo@v1
         with:
