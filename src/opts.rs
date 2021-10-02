@@ -7,7 +7,7 @@ use clap::{
     Clap,
 };
 use console::style;
-use semver::{ReqParseError, VersionReq};
+use semver::{Error as ReqParseError, VersionReq};
 use std::fmt::Display;
 
 #[derive(Clap, Debug)]
@@ -52,7 +52,7 @@ pub(crate) struct Opts {
 }
 
 #[non_exhaustive]
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum Error {
     EmptyGroupId(String),
     EmptyArtifact(String),
@@ -177,6 +177,18 @@ impl std::error::Error for Error {
     }
 }
 
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::EmptyGroupId(lhs), Self::EmptyGroupId(rhs)) => lhs == rhs,
+            (Self::EmptyArtifact(lhs), Self::EmptyArtifact(rhs)) => lhs == rhs,
+            (Self::MissingArtifact(lhs), Self::MissingArtifact(rhs)) => lhs == rhs,
+            (Self::InvalidRange(lhs, _), Self::InvalidRange(rhs, _)) => lhs == rhs,
+            _ => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,14 +198,24 @@ mod tests {
     #[test]
     fn empty_args_shows_help() {
         let err = Opts::of(&[]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::MissingArgumentOrSubcommand);
+        assert_eq!(
+            err.kind,
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 
     #[test]
     fn test_empty_version_arg() {
+        console::set_colors_enabled(false);
         let err = Opts::of(&[""]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, vec![String::from("<version-checks>...")]);
+        assert_eq!(err.kind, ErrorKind::ValueValidation);
+        let expected = [
+            "<VERSION_CHECKS>...",
+            "",
+            "The groupId may not be empty in ",
+        ];
+        let expected = expected.map(String::from);
+        assert_eq!(&err.info[..], &expected[..]);
     }
 
     #[test_case("foo:bar", "foo", "bar"; "case1")]
@@ -244,14 +266,14 @@ mod tests {
         assert_eq!(err.kind, ErrorKind::ValueValidation);
         assert_eq!(
             err.to_string(),
-            format!("error: Invalid value for '<version-checks>...': {}\n\nFor more information try --help\n", msg)
+            format!("error: Invalid value for '<VERSION_CHECKS>...': {}\n\nFor more information try --help\n", msg)
         );
     }
 
     #[test_case("foo:bar:1", vec!["1"]; "version 1")]
     #[test_case("foo:bar:0", vec!["0"]; "version 0")]
     #[test_case("foo:bar:*", vec!["*"]; "any version")]
-    #[test_case("foo:bar:", vec!["*"]; "empty version")]
+    #[test_case("foo:bar:", vec!["*"]; "inconclusive - empty version")]
     #[test_case("foo:bar", vec![]; "no version")]
     #[test_case("foo:bar:1.0", vec!["1.0"]; "version 1.0")]
     #[test_case("foo:bar:1.x", vec!["1.x"]; "version 1.x")]
@@ -261,8 +283,8 @@ mod tests {
     #[test_case("foo:bar:>1.2.3", vec![">1.2.3"]; "gt version")]
     #[test_case("foo:bar:<=1.2.3", vec!["<=1.2.3"]; "lte version")]
     #[test_case("foo:bar:>=1.2.3", vec![">=1.2.3"]; "gte version")]
-    #[test_case("foo:bar:1.2.3 2", vec!["1.2.3 2"]; "multi range with space")]
-    #[test_case("foo:bar:1.2.3||2", vec!["1.2.3||2"]; "multi range with or")]
+    #[test_case("foo:bar:1.2.3 2", vec!["1.2.3 2"]; "inconclusive - multi range with space")]
+    #[test_case("foo:bar:1.2.3||2", vec!["1.2.3||2"]; "inconclusive - multi range with or")]
     #[test_case("foo:bar:1.2.3:2", vec!["1.2.3", "2"]; "multiple ranges")]
     fn test_version_arg_range(arg: &str, ranges: Vec<&str>) {
         let ranges = ranges
@@ -289,14 +311,14 @@ mod tests {
     #[test_case("foo:bar:*42", "*42"; "mixed star and version")]
     #[test_case("foo:bar:1.3.3.7", "1.3.3.7"; "4 segments")]
     #[test_case("foo:bar:1:foo", "foo"; "second version fails")]
-    #[test_case("foo:bar:1.2.3,2", "1.2.3,2"; "multi range with comma separator")]
+    #[test_case("foo:bar:1.2.3,2", "1.2.3,2"; "inconclusive - multi range with comma separator")]
     fn test_version_arg_invalid_range(arg: &str, spec: &str) {
         console::set_colors_enabled(false);
         let err = Opts::of(&[arg]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ValueValidation);
         assert_eq!(
             err.to_string(),
-            format!("error: Invalid value for '<version-checks>...': Could not parse {} into a semantic version range. Please provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax\n\nFor more information try --help\n", spec)
+            format!("error: Invalid value for '<VERSION_CHECKS>...': Could not parse {} into a semantic version range. Please provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax\n\nFor more information try --help\n", spec)
         );
     }
 
@@ -337,7 +359,7 @@ mod tests {
     fn test_resolver_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, vec![String::from("--resolver <resolver>")]);
+        assert_eq!(err.info, vec![String::from("--resolver <RESOLVER>")]);
     }
 
     #[test]
@@ -363,7 +385,7 @@ mod tests {
     fn test_user_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
         assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, vec![String::from("--user <user>")]);
+        assert_eq!(err.info, vec![String::from("--user <USER>")]);
     }
 
     #[test]
@@ -385,7 +407,7 @@ mod tests {
         assert_eq!(err.kind, ErrorKind::EmptyValue);
         assert_eq!(
             err.info,
-            vec![String::from("--insecure-password <insecure-password>")]
+            vec![String::from("--insecure-password <INSECURE_PASSWORD>")]
         );
     }
 }

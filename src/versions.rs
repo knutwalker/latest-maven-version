@@ -28,12 +28,7 @@ impl Versions {
         mut requirements: Vec<VersionReq>,
     ) -> Vec<(VersionReq, Option<Version>)> {
         if requirements.is_empty() {
-            let req = if allow_pre_release {
-                VersionReq::any()
-            } else {
-                VersionReq::parse("*").expect("Parsing `*` into a version range always succeeds.")
-            };
-            requirements.push(req);
+            requirements.push(VersionReq::STAR);
         }
         let latest = self.find_latest_versions(&requirements[..], allow_pre_release);
         requirements.into_iter().zip(latest.into_iter()).collect()
@@ -126,7 +121,7 @@ mod tests {
     fn test_empty_versions() {
         let versions = Versions::from(Vec::<String>::new());
         assert_eq!(
-            versions.find_latest_versions(&[VersionReq::any()], false),
+            versions.find_latest_versions(&[VersionReq::STAR], false),
             vec![None]
         );
     }
@@ -135,7 +130,7 @@ mod tests {
     fn match_single_version() {
         let versions = Versions::from("1.0.0");
         assert_eq!(
-            versions.find_latest_versions(&[VersionReq::any()], false),
+            versions.find_latest_versions(&[VersionReq::STAR], false),
             vec![Some(Version::new(1, 0, 0))]
         );
     }
@@ -144,7 +139,7 @@ mod tests {
     fn select_latest() {
         let versions = Versions::from(["1.0.0", "1.3.37"].as_ref());
         assert_eq!(
-            versions.find_latest_versions(&[VersionReq::any()], false),
+            versions.find_latest_versions(&[VersionReq::STAR], false),
             vec![Some(Version::new(1, 3, 37))]
         );
     }
@@ -153,7 +148,7 @@ mod tests {
     fn lenient_version_parsing() {
         let versions = Versions::from(["1.0.0", "1.337"].as_ref());
         assert_eq!(
-            versions.find_latest_versions(&[VersionReq::any()], false),
+            versions.find_latest_versions(&[VersionReq::STAR], false),
             vec![Some(Version::new(1, 337, 0))]
         );
     }
