@@ -1,18 +1,12 @@
 use crate::{Config, Coordinates, Server, VersionCheck};
-use clap::{
-    AppSettings::{
-        AllowNegativeNumbers, ArgRequiredElseHelp, ColoredHelp, DeriveDisplayOrder,
-        UnifiedHelpMessage,
-    },
-    Clap,
-};
+use clap::{AppSettings::DeriveDisplayOrder, Parser};
 use console::style;
 use semver::{Error as ReqParseError, VersionReq};
 use std::fmt::Display;
 
-#[derive(Clap, Debug)]
+#[derive(Parser, Debug)]
 #[cfg_attr(test, derive(Default))]
-#[clap(version, about, setting = AllowNegativeNumbers, setting = ArgRequiredElseHelp, setting = ColoredHelp, setting = DeriveDisplayOrder, setting = UnifiedHelpMessage)]
+#[clap(version, about, allow_negative_numbers = true, arg_required_else_help = true, setting = DeriveDisplayOrder)]
 pub(crate) struct Opts {
     /// The maven coordinates to check for. Can be specified multiple times.
     ///
@@ -192,14 +186,17 @@ impl PartialEq for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::ErrorKind;
+    use clap::{
+        error::{ContextKind, ContextValue},
+        ErrorKind,
+    };
     use test_case::test_case;
 
     #[test]
     fn empty_args_shows_help() {
         let err = Opts::of(&[]).unwrap_err();
         assert_eq!(
-            err.kind,
+            err.kind(),
             ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
         );
     }
@@ -208,14 +205,18 @@ mod tests {
     fn test_empty_version_arg() {
         console::set_colors_enabled(false);
         let err = Opts::of(&[""]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::ValueValidation);
-        let expected = [
-            "<VERSION_CHECKS>...",
-            "",
-            "The groupId may not be empty in ",
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+
+        let arg = ContextValue::String("<VERSION_CHECKS>...".into());
+        let value = ContextValue::String("".into());
+
+        let expected = vec![
+            (ContextKind::InvalidArg, &arg),
+            (ContextKind::InvalidValue, &value),
         ];
-        let expected = expected.map(String::from);
-        assert_eq!(&err.info[..], &expected[..]);
+
+        let context = err.context().collect::<Vec<_>>();
+        assert_eq!(context, expected);
     }
 
     #[test_case("foo:bar", "foo", "bar"; "case1")]
@@ -249,25 +250,32 @@ mod tests {
         parse_coordinates(arg).unwrap_err()
     }
 
-    #[test_case(":foo", "The groupId may not be empty in :foo"; "empty_group_id_1")]
-    #[test_case(":foo:", "The groupId may not be empty in :foo:"; "empty_group_id_2")]
-    #[test_case(":", "The groupId may not be empty in :"; "empty_group_id_4")]
-    #[test_case("::", "The groupId may not be empty in ::"; "empty_group_id_5")]
-    #[test_case("  ", "The groupId may not be empty in   "; "empty_group_id_6")]
-    #[test_case("  :", "The groupId may not be empty in   :"; "empty_group_id_7")]
-    #[test_case("foo:", "The artifact may not be empty in foo:"; "empty_artifact_1")]
-    #[test_case("foo::", "The artifact may not be empty in foo::"; "empty_artifact_2")]
-    #[test_case("foo: ", "The artifact may not be empty in foo: "; "empty_artifact_3")]
-    #[test_case("foo: :", "The artifact may not be empty in foo: :"; "empty_artifact_4")]
-    #[test_case("foo", "The artifact is missing in foo"; "missing_artifact")]
-    fn test_version_arg_invalid_coords(arg: &str, msg: &str) {
+    #[test_case(":foo"; "empty_group_id_1")]
+    #[test_case(":foo:"; "empty_group_id_2")]
+    #[test_case(":"; "empty_group_id_4")]
+    #[test_case("::"; "empty_group_id_5")]
+    #[test_case("  "; "empty_group_id_6")]
+    #[test_case("  :"; "empty_group_id_7")]
+    #[test_case("foo:"; "empty_artifact_1")]
+    #[test_case("foo::"; "empty_artifact_2")]
+    #[test_case("foo: "; "empty_artifact_3")]
+    #[test_case("foo: :"; "empty_artifact_4")]
+    #[test_case("foo"; "missing_artifact")]
+    fn test_version_arg_invalid_coords(arg: &str) {
         console::set_colors_enabled(false);
         let err = Opts::of(&[arg]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::ValueValidation);
-        assert_eq!(
-            err.to_string(),
-            format!("error: Invalid value for '<VERSION_CHECKS>...': {}\n\nFor more information try --help\n", msg)
-        );
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+
+        let value = ContextValue::String(arg.into());
+        let arg = ContextValue::String("<VERSION_CHECKS>...".into());
+
+        let expected = vec![
+            (ContextKind::InvalidArg, &arg),
+            (ContextKind::InvalidValue, &value),
+        ];
+
+        let context = err.context().collect::<Vec<_>>();
+        assert_eq!(context, expected);
     }
 
     #[test_case("foo:bar:1", vec!["1"]; "version 1")]
@@ -299,27 +307,34 @@ mod tests {
         assert_eq!(checks.next(), None);
     }
 
-    #[test_case("foo:bar:01", "01"; "major with leading 0")]
-    #[test_case("foo:bar:1.02", "1.02"; "minor with leading 0")]
-    #[test_case("foo:bar:.", "."; "missing major")]
-    #[test_case("foo:bar:1.", "1."; "trailing period before minor")]
-    #[test_case("foo:bar:1..", "1.."; "two trailing periods")]
-    #[test_case("foo:bar:1.2.", "1.2."; "trailing period before path")]
-    #[test_case("foo:bar:qux", "qux"; "non numeric major")]
-    #[test_case("foo:bar:1.qux", "1.qux"; "non numeric minor")]
-    #[test_case("foo:bar:-42", "-42"; "negative major")]
-    #[test_case("foo:bar:*42", "*42"; "mixed star and version")]
-    #[test_case("foo:bar:1.3.3.7", "1.3.3.7"; "4 segments")]
-    #[test_case("foo:bar:1:foo", "foo"; "second version fails")]
-    #[test_case("foo:bar:1.2.3,2", "1.2.3,2"; "inconclusive - multi range with comma separator")]
-    fn test_version_arg_invalid_range(arg: &str, spec: &str) {
+    #[test_case("foo:bar:01"; "major with leading 0")]
+    #[test_case("foo:bar:1.02"; "minor with leading 0")]
+    #[test_case("foo:bar:."; "missing major")]
+    #[test_case("foo:bar:1."; "trailing period before minor")]
+    #[test_case("foo:bar:1.."; "two trailing periods")]
+    #[test_case("foo:bar:1.2."; "trailing period before path")]
+    #[test_case("foo:bar:qux"; "non numeric major")]
+    #[test_case("foo:bar:1.qux"; "non numeric minor")]
+    #[test_case("foo:bar:-42"; "negative major")]
+    #[test_case("foo:bar:*42"; "mixed star and version")]
+    #[test_case("foo:bar:1.3.3.7"; "4 segments")]
+    #[test_case("foo:bar:1:foo"; "second version fails")]
+    #[test_case("foo:bar:1.2.3,2"; "inconclusive - multi range with comma separator")]
+    fn test_version_arg_invalid_range(arg: &str) {
         console::set_colors_enabled(false);
         let err = Opts::of(&[arg]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::ValueValidation);
-        assert_eq!(
-            err.to_string(),
-            format!("error: Invalid value for '<VERSION_CHECKS>...': Could not parse {} into a semantic version range. Please provide a valid range according to https://www.npmjs.com/package/semver#advanced-range-syntax\n\nFor more information try --help\n", spec)
-        );
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+
+        let value = ContextValue::String(arg.into());
+        let arg = ContextValue::String("<VERSION_CHECKS>...".into());
+
+        let expected = vec![
+            (ContextKind::InvalidArg, &arg),
+            (ContextKind::InvalidValue, &value),
+        ];
+
+        let context = err.context().collect::<Vec<_>>();
+        assert_eq!(context, expected);
     }
 
     #[test]
@@ -358,8 +373,19 @@ mod tests {
     #[test_case("--repo"; "alias")]
     fn test_resolver_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, vec![String::from("--resolver <RESOLVER>")]);
+        assert_eq!(err.kind(), ErrorKind::EmptyValue);
+
+        let arg = ContextValue::String("--resolver <RESOLVER>".into());
+        let usage =
+            ContextValue::String("USAGE:\n    binary-name [OPTIONS] [VERSION_CHECKS]...".into());
+
+        let expected = vec![
+            (ContextKind::InvalidArg, &arg),
+            (ContextKind::Usage, &usage),
+        ];
+
+        let context = err.context().collect::<Vec<_>>();
+        assert_eq!(context, expected);
     }
 
     #[test]
@@ -384,8 +410,19 @@ mod tests {
     #[test_case("--username"; "alias")]
     fn test_user_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(err.info, vec![String::from("--user <USER>")]);
+        assert_eq!(err.kind(), ErrorKind::EmptyValue);
+
+        let arg = ContextValue::String("--user <USER>".into());
+        let usage =
+            ContextValue::String("USAGE:\n    binary-name [OPTIONS] [VERSION_CHECKS]...".into());
+
+        let expected = vec![
+            (ContextKind::InvalidArg, &arg),
+            (ContextKind::Usage, &usage),
+        ];
+
+        let context = err.context().collect::<Vec<_>>();
+        assert_eq!(context, expected);
     }
 
     #[test]
@@ -398,16 +435,24 @@ mod tests {
     #[test]
     fn test_password_option_requires_user() {
         let err = Opts::of(&["--insecure-password", "s3cure"]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::MissingRequiredArgument);
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]
     fn test_password_missing_value() {
         let err = Opts::of(&["--user", "Alice", "--insecure-password"]).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::EmptyValue);
-        assert_eq!(
-            err.info,
-            vec![String::from("--insecure-password <INSECURE_PASSWORD>")]
-        );
+        assert_eq!(err.kind(), ErrorKind::EmptyValue);
+
+        let arg = ContextValue::String("--insecure-password <INSECURE_PASSWORD>".into());
+        let usage =
+            ContextValue::String("USAGE:\n    binary-name [OPTIONS] [VERSION_CHECKS]...".into());
+
+        let expected = vec![
+            (ContextKind::InvalidArg, &arg),
+            (ContextKind::Usage, &usage),
+        ];
+
+        let context = err.context().collect::<Vec<_>>();
+        assert_eq!(context, expected);
     }
 }
