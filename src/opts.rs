@@ -1,12 +1,12 @@
 use crate::{Config, Coordinates, Server, VersionCheck};
-use clap::{AppSettings::DeriveDisplayOrder, Parser};
+use clap::Parser;
 use console::style;
 use semver::{Error as ReqParseError, VersionReq};
 use std::fmt::Display;
 
 #[derive(Parser, Debug)]
 #[cfg_attr(test, derive(Default))]
-#[clap(version, about, allow_negative_numbers = true, arg_required_else_help = true, setting = DeriveDisplayOrder)]
+#[command(version, about, arg_required_else_help = true)]
 pub(crate) struct Opts {
     /// The maven coordinates to check for. Can be specified multiple times.
     ///
@@ -16,32 +16,32 @@ pub(crate) struct Opts {
     /// The latest version per bucket is then shown.
     /// The value for a requirement follow the semver range specification from
     /// https://www.npmjs.com/package/semver#advanced-range-syntax
-    #[clap(min_values = 1, parse(try_from_str = parse_coordinates))]
+    #[arg(num_args = 1.., value_parser(parse_coordinates), allow_negative_numbers = true)]
     version_checks: Vec<VersionCheck>,
 
     /// Also consider pre releases.
-    #[clap(short, long)]
+    #[arg(short, long)]
     include_pre_releases: bool,
 
     /// Use this repository as resolver.
     ///
     /// This repository must follow maven style publication.
     /// By default, Maven Central is used.
-    #[clap(short, long, alias = "repo")]
+    #[arg(short, long, alias = "repo")]
     resolver: Option<String>,
 
     /// Username for authentication against the resolver.
     ///
     /// If provided, requests against the resolver will authenticate with Basic Auth.
     /// The password for this user will be read from stdin.
-    #[clap(short, long, alias = "username")]
+    #[arg(short, long, alias = "username")]
     user: Option<String>,
 
     /// Consider leaving this undefined, the password will be read from stdin.
     ///
     /// Password for authentication against the resolver. If provided, the given value is used.
     /// However, if not provided, but a username has been, the password will be read from a secure prompt.
-    #[clap(long, requires = "user")]
+    #[arg(long, requires = "user")]
     insecure_password: Option<String>,
 }
 
@@ -113,13 +113,14 @@ impl Opts {
     #[cfg(not(test))]
     fn ask_pass(user: &str) -> Option<String> {
         let prompt = format!("Enter password for [{}]: ", style(user).cyan());
-        rpassword::read_password_from_tty(Some(&prompt)).ok()
+        rpassword::prompt_password(prompt).ok()
     }
 
     #[cfg(test)]
     fn ask_pass(user: &str) -> Option<String> {
+        let user = format!("{}\n", user);
         let mut cursor = std::io::Cursor::new(user);
-        rpassword::read_password_with_reader(Some(&mut cursor)).ok()
+        rpassword::read_password_from_bufread(&mut cursor).ok()
     }
 
     pub(crate) fn config(&self) -> Config {
@@ -186,10 +187,7 @@ impl PartialEq for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::{
-        error::{ContextKind, ContextValue},
-        ErrorKind,
-    };
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
     use test_case::test_case;
 
     #[test]
@@ -207,7 +205,7 @@ mod tests {
         let err = Opts::of(&[""]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::ValueValidation);
 
-        let arg = ContextValue::String("<VERSION_CHECKS>...".into());
+        let arg = ContextValue::String("[VERSION_CHECKS]...".into());
         let value = ContextValue::String("".into());
 
         let expected = vec![
@@ -267,7 +265,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::ValueValidation);
 
         let value = ContextValue::String(arg.into());
-        let arg = ContextValue::String("<VERSION_CHECKS>...".into());
+        let arg = ContextValue::String("[VERSION_CHECKS]...".into());
 
         let expected = vec![
             (ContextKind::InvalidArg, &arg),
@@ -281,7 +279,7 @@ mod tests {
     #[test_case("foo:bar:1", vec!["1"]; "version 1")]
     #[test_case("foo:bar:0", vec!["0"]; "version 0")]
     #[test_case("foo:bar:*", vec!["*"]; "any version")]
-    #[test_case("foo:bar:", vec!["*"]; "inconclusive - empty version")]
+    #[test_case("foo:bar:", vec!["*"] => inconclusive; "empty version")]
     #[test_case("foo:bar", vec![]; "no version")]
     #[test_case("foo:bar:1.0", vec!["1.0"]; "version 1.0")]
     #[test_case("foo:bar:1.x", vec!["1.x"]; "version 1.x")]
@@ -291,8 +289,8 @@ mod tests {
     #[test_case("foo:bar:>1.2.3", vec![">1.2.3"]; "gt version")]
     #[test_case("foo:bar:<=1.2.3", vec!["<=1.2.3"]; "lte version")]
     #[test_case("foo:bar:>=1.2.3", vec![">=1.2.3"]; "gte version")]
-    #[test_case("foo:bar:1.2.3 2", vec!["1.2.3 2"]; "inconclusive - multi range with space")]
-    #[test_case("foo:bar:1.2.3||2", vec!["1.2.3||2"]; "inconclusive - multi range with or")]
+    #[test_case("foo:bar:1.2.3 2", vec!["1.2.3 2"] => inconclusive; "multi range with space")]
+    #[test_case("foo:bar:1.2.3||2", vec!["1.2.3||2"] => inconclusive; "multi range with or")]
     #[test_case("foo:bar:1.2.3:2", vec!["1.2.3", "2"]; "multiple ranges")]
     fn test_version_arg_range(arg: &str, ranges: Vec<&str>) {
         let ranges = ranges
@@ -319,14 +317,14 @@ mod tests {
     #[test_case("foo:bar:*42"; "mixed star and version")]
     #[test_case("foo:bar:1.3.3.7"; "4 segments")]
     #[test_case("foo:bar:1:foo"; "second version fails")]
-    #[test_case("foo:bar:1.2.3,2"; "inconclusive - multi range with comma separator")]
+    #[test_case("foo:bar:1.2.3,2" => inconclusive; "multi range with comma separator")]
     fn test_version_arg_invalid_range(arg: &str) {
         console::set_colors_enabled(false);
         let err = Opts::of(&[arg]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::ValueValidation);
 
         let value = ContextValue::String(arg.into());
-        let arg = ContextValue::String("<VERSION_CHECKS>...".into());
+        let arg = ContextValue::String("[VERSION_CHECKS]...".into());
 
         let expected = vec![
             (ContextKind::InvalidArg, &arg),
@@ -373,18 +371,24 @@ mod tests {
     #[test_case("--repo"; "alias")]
     fn test_resolver_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::EmptyValue);
-
-        let arg = ContextValue::String("--resolver <RESOLVER>".into());
-        let usage =
-            ContextValue::String("USAGE:\n    binary-name [OPTIONS] [VERSION_CHECKS]...".into());
+        assert_eq!(err.kind(), ErrorKind::InvalidValue);
 
         let expected = vec![
-            (ContextKind::InvalidArg, &arg),
-            (ContextKind::Usage, &usage),
+            (
+                ContextKind::InvalidArg,
+                ContextValue::String("--resolver <RESOLVER>".into()),
+            ),
+            (
+                ContextKind::InvalidValue,
+                ContextValue::String(String::new()),
+            ),
+            (ContextKind::ValidValue, ContextValue::Strings(Vec::new())),
         ];
 
-        let context = err.context().collect::<Vec<_>>();
+        let context = err
+            .context()
+            .map(|(k, v)| (k, v.clone()))
+            .collect::<Vec<_>>();
         assert_eq!(context, expected);
     }
 
@@ -401,7 +405,7 @@ mod tests {
     #[test_case("--username"; "alias")]
     fn test_user_option(flag: &str) {
         let mut opts = Opts::of(&[flag, "Alice"]).unwrap();
-        assert_eq!(opts.user, Some("Alice".into()));
+        assert_eq!(opts.user.as_deref(), Some("Alice"));
         assert_eq!(opts.resolver_server().auth.unwrap().0, "Alice");
     }
 
@@ -410,18 +414,24 @@ mod tests {
     #[test_case("--username"; "alias")]
     fn test_user_missing_value(flag: &str) {
         let err = Opts::of(&[flag]).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::EmptyValue);
-
-        let arg = ContextValue::String("--user <USER>".into());
-        let usage =
-            ContextValue::String("USAGE:\n    binary-name [OPTIONS] [VERSION_CHECKS]...".into());
+        assert_eq!(err.kind(), ErrorKind::InvalidValue);
 
         let expected = vec![
-            (ContextKind::InvalidArg, &arg),
-            (ContextKind::Usage, &usage),
+            (
+                ContextKind::InvalidArg,
+                ContextValue::String("--user <USER>".into()),
+            ),
+            (
+                ContextKind::InvalidValue,
+                ContextValue::String(String::new()),
+            ),
+            (ContextKind::ValidValue, ContextValue::Strings(Vec::new())),
         ];
 
-        let context = err.context().collect::<Vec<_>>();
+        let context = err
+            .context()
+            .map(|(k, v)| (k, v.clone()))
+            .collect::<Vec<_>>();
         assert_eq!(context, expected);
     }
 
@@ -441,18 +451,24 @@ mod tests {
     #[test]
     fn test_password_missing_value() {
         let err = Opts::of(&["--user", "Alice", "--insecure-password"]).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::EmptyValue);
-
-        let arg = ContextValue::String("--insecure-password <INSECURE_PASSWORD>".into());
-        let usage =
-            ContextValue::String("USAGE:\n    binary-name [OPTIONS] [VERSION_CHECKS]...".into());
+        assert_eq!(err.kind(), ErrorKind::InvalidValue);
 
         let expected = vec![
-            (ContextKind::InvalidArg, &arg),
-            (ContextKind::Usage, &usage),
+            (
+                ContextKind::InvalidArg,
+                ContextValue::String("--insecure-password <INSECURE_PASSWORD>".into()),
+            ),
+            (
+                ContextKind::InvalidValue,
+                ContextValue::String(String::new()),
+            ),
+            (ContextKind::ValidValue, ContextValue::Strings(Vec::new())),
         ];
 
-        let context = err.context().collect::<Vec<_>>();
+        let context = err
+            .context()
+            .map(|(k, v)| (k, v.clone()))
+            .collect::<Vec<_>>();
         assert_eq!(context, expected);
     }
 }

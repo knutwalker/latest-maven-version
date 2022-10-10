@@ -9,21 +9,24 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.52"
-clap = { version = "3.1.2", features = ["derive"] }
-color-eyre = { version = "0.6.0", default-features = false }
-console = { version = "0.15.0", default-features = false }
-itertools = "0.10.3"
+async-trait = "0.1.57"
+clap = { version = "4.0.12", features = ["derive"] }
+color-eyre = { version = "0.6.2", default-features = false }
+console = { version = "0.15.2", default-features = false }
+itertools = "0.10.5"
 lenient_semver = "0.4.2"
-reqwest = { version = "0.11.9", default-features = false, features = [ "gzip", "rustls-tls" ] }
-rpassword = "5.0.1"
-semver = "1.0.6"
-tokio = { version = "1.17.0", features = ["full"] }
-url = "2.2.2"
+reqwest = { version = "0.11.12", default-features = false, features = [
+    "gzip",
+    "rustls-tls",
+] }
+rpassword = "7.0.0"
+semver = "1.0.14"
+tokio = { version = "1.21.2", features = ["full"] }
+url = "2.3.1"
 xmlparser = "0.13.3"
 
 [dev-dependencies]
-test-case = "1.2.3"
+test-case = "2.2.2"
 
 [profile.dev.package.backtrace]
 opt-level = 3
