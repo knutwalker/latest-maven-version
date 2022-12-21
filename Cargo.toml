@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 async-trait = "0.1.58"
-clap = { version = "4.0.17", features = ["derive"] }
+clap = { version = "4.0.30", features = ["derive"] }
 color-eyre = { version = "0.6.2", default-features = false }
 console = { version = "0.15.2", default-features = false }
 itertools = "0.10.5"
